@@ -1,0 +1,80 @@
+# ============================================================
+# ESP-IDF / ESP32-S3 项目忽略规则
+# ============================================================
+
+# ---------- 构建产物 (由 idf.py / CMake / Ninja 生成) ----------
+build/
+build_*/
+cmake-build-*/
+flash_args
+flasher_args.json
+project_description.json
+*.elf
+*.bin
+*.map
+*.hex
+*.out
+*.uf2
+*.lst
+*.size
+*.db
+*.obj
+
+# ---------- SDK 配置 ----------
+# sdkconfig 需要入库, 保证团队/CI 使用相同的配置
+# sdkconfig.old 是构建时的自动备份, 不入库
+sdkconfig.old
+sdkconfig.ci
+sdkconfig.ci.*
+
+# ---------- IDF 组件管理器生成的文件 ----------
+managed_components/
+# dependencies.lock 记录依赖的精确版本与哈希, 需入库以保证可复现构建
+
+# ---------- IDE / 编辑器 ----------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+.vs/
+.clangd.bak
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+ENV/
+*.egg-info/
+
+# ---------- 日志 / 临时文件 ----------
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+*.bak
+*.swp
+
+# ---------- 操作系统文件 ----------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ---------- 其他 ----------
+# 串口/网络抓包、测试输出
+*.pcap
+serial_output*
