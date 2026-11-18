@@ -26,16 +26,145 @@
 
 #include "tcp_server.h"
 #include "wifi_manager.h"
+#include "sys_stats.h"
+#if CONFIG_EXAMPLE_LED_GPIO >= 0
+#include "led_status.h"
+#endif
 
 static const char *TAG = "app_console";
 
-#define CONSOLE_PROMPT "esp32s3> "
+#define CONSOLE_PROMPT "esp32s3>"
 
 /* Result of the last 'scan' command */
 static wifi_scan_ap_t s_scan_aps[WIFI_SCAN_MAX_APS];
 static size_t s_scan_count;
 /* Password used when 'connect' is called without a password argument */
 static char s_default_password[64];
+
+/* ------------------------------------------------------------------ */
+/* UTF-8 aware column formatting                                        */
+/* ------------------------------------------------------------------ */
+
+/* Width of the SSID column, in terminal characters */
+#define SSID_COL_WIDTH 32
+
+/* Decode one UTF-8 code point. Returns the number of bytes consumed and
+   stores the code point in @p cp. Invalid sequences consume a single byte. */
+static int utf8_decode(const char *str, uint32_t *cp)
+{
+    const unsigned char *u = (const unsigned char *)str;
+
+    if (u[0] < 0x80) {
+        *cp = u[0];
+        return 1;
+    }
+    if ((u[0] & 0xE0) == 0xC0 && (u[1] & 0xC0) == 0x80) {
+        *cp = ((uint32_t)(u[0] & 0x1F) << 6) | (uint32_t)(u[1] & 0x3F);
+        return 2;
+    }
+    if ((u[0] & 0xF0) == 0xE0 && (u[1] & 0xC0) == 0x80 && (u[2] & 0xC0) == 0x80) {
+        *cp = ((uint32_t)(u[0] & 0x0F) << 12) |
+              ((uint32_t)(u[1] & 0x3F) << 6) |
+              (uint32_t)(u[2] & 0x3F);
+        return 3;
+    }
+    if ((u[0] & 0xF8) == 0xF0 && (u[1] & 0xC0) == 0x80 &&
+        (u[2] & 0xC0) == 0x80 && (u[3] & 0xC0) == 0x80) {
+        *cp = ((uint32_t)(u[0] & 0x07) << 18) |
+              ((uint32_t)(u[1] & 0x3F) << 12) |
+              ((uint32_t)(u[2] & 0x3F) << 6) |
+              (uint32_t)(u[3] & 0x3F);
+        return 4;
+    }
+
+    *cp = u[0];
+    return 1;
+}
+
+/* Number of terminal columns used by a code point (approximation of
+   wcwidth(): CJK / fullwidth characters take two columns, combining
+   marks and control characters take none). */
+static int codepoint_width(uint32_t cp)
+{
+    if (cp < 0x20 || (cp >= 0x7F && cp < 0xA0)) {
+        return 0;
+    }
+    if ((cp >= 0x0300 && cp <= 0x036F) || (cp >= 0x200B && cp <= 0x200F) ||
+        (cp >= 0xFE00 && cp <= 0xFE0F)) {
+        return 0;
+    }
+    if ((cp >= 0x1100 && cp <= 0x115F) ||
+        (cp >= 0x2E80 && cp <= 0x303E) ||
+        (cp >= 0x3041 && cp <= 0x33FF) ||
+        (cp >= 0x3400 && cp <= 0x4DBF) ||
+        (cp >= 0x4E00 && cp <= 0x9FFF) ||
+        (cp >= 0xA000 && cp <= 0xA4CF) ||
+        (cp >= 0xAC00 && cp <= 0xD7A3) ||
+        (cp >= 0xF900 && cp <= 0xFAFF) ||
+        (cp >= 0xFE30 && cp <= 0xFE6F) ||
+        (cp >= 0xFF00 && cp <= 0xFF60) ||
+        (cp >= 0xFFE0 && cp <= 0xFFE6) ||
+        (cp >= 0x20000 && cp <= 0x2FFFD) ||
+        (cp >= 0x30000 && cp <= 0x3FFFD)) {
+        return 2;
+    }
+    return 1;
+}
+
+/* Display width of a NUL terminated UTF-8 string, in terminal columns */
+static int utf8_display_width(const char *str)
+{
+    int width = 0;
+
+    while (*str != '\0') {
+        uint32_t cp;
+        int len = utf8_decode(str, &cp);
+        str += len;
+        width += codepoint_width(cp);
+    }
+    return width;
+}
+
+/* Print @p str so that it occupies exactly @p width terminal columns.
+   Strings that are too long are cut and marked with an ellipsis. */
+static void print_column(const char *str, int width)
+{
+    int used = utf8_display_width(str);
+
+    if (used <= width) {
+        fputs(str, stdout);
+        for (int i = used; i < width; i++) {
+            putchar(' ');
+        }
+        return;
+    }
+
+    if (width < 4) {
+        /* Not enough room for the ellipsis */
+        fputs(str, stdout);
+        return;
+    }
+
+    const char *p = str;
+    int printed = 0;
+    used = 0;
+    while (*p != '\0') {
+        uint32_t cp;
+        int len = utf8_decode(p, &cp);
+        int w = codepoint_width(cp);
+        if (used + w > width - 3) {
+            break;
+        }
+        used += w;
+        printed += len;
+        p += len;
+    }
+
+    printf("%.*s...", printed, str);
+    for (int i = used + 3; i < width; i++) {
+        putchar(' ');
+    }
+}
 
 static const char *authmode_str(uint8_t authmode)
 {
@@ -85,10 +214,14 @@ static int cmd_scan(int argc, char **argv)
         return 0;
     }
 
-    printf("\n%3s  %-32s  %5s  %4s  %s\n", "Idx", "SSID", "RSSI", "CH", "AUTH");
+    printf("\n%3s  ", "Idx");
+    print_column("SSID", SSID_COL_WIDTH);
+    printf("  %5s  %4s  %s\n", "RSSI", "CH", "AUTH");
+
     for (size_t i = 0; i < count; i++) {
-        printf("%3zu  %-32s  %5d  %4u  %s\n", i + 1, s_scan_aps[i].ssid,
-               s_scan_aps[i].rssi, s_scan_aps[i].channel,
+        printf("%3zu  ", i + 1);
+        print_column(s_scan_aps[i].ssid, SSID_COL_WIDTH);
+        printf("  %5d  %4u  %s\n", s_scan_aps[i].rssi, s_scan_aps[i].channel,
                authmode_str(s_scan_aps[i].authmode));
     }
     printf("\nUse 'connect <index>' or 'connect <ssid> [password]' to connect.\n");
@@ -228,6 +361,9 @@ static int cmd_status(int argc, char **argv)
     printf("TCP server: %s (port %d)\n",
            tcp_server_is_running() ? "running" : "stopped",
            tcp_server_port());
+#if CONFIG_EXAMPLE_LED_GPIO >= 0
+    printf("LED       : %s\n", led_status_state_name(led_status_get()));
+#endif
     return 0;
 }
 
@@ -340,6 +476,8 @@ static void register_console_commands(void)
         .func = &cmd_server_stop,
     };
     ESP_ERROR_CHECK(esp_console_cmd_register(&server_stop_cmd));
+
+    ESP_ERROR_CHECK(sys_stats_register());
 }
 
 esp_err_t app_console_start(void)
@@ -347,7 +485,7 @@ esp_err_t app_console_start(void)
     esp_console_repl_config_t repl_config = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
     repl_config.prompt = CONSOLE_PROMPT;
     repl_config.max_cmdline_length = 256;
-    repl_config.task_stack_size = 4096;
+    repl_config.task_stack_size = 6144;
     repl_config.task_priority = 2;
 
     /* This creates the console, installs the driver of the console
@@ -357,20 +495,20 @@ esp_err_t app_console_start(void)
     ESP_RETURN_ON_ERROR(esp_console_new_repl_stdio(&repl_config, &repl), TAG,
                         "esp_console_new_repl_stdio() failed");
 
+#if CONFIG_EXAMPLE_CONSOLE_FORCE_RAW_MODE
+    /* The console probes the terminal with a DSR query (ESC[5n) and falls
+       back to "dumb mode" (no line editing, no history) if the answer does
+       not come back within 500 ms. On USB Serial/JTAG the round trip is
+       easily lost (the boot logs are still being flushed, the monitor may
+       not be attached yet), which disables the features even though the
+       terminal is perfectly capable. Force the raw mode here, before the
+       REPL task starts, so that line editing and history always work. */
+    linenoiseSetDumbMode(0);
+#endif
+
     register_console_commands();
 
     ESP_RETURN_ON_ERROR(esp_console_start_repl(repl), TAG, "esp_console_start_repl() failed");
-
-    printf("\n"
-           "TCP server console\n"
-           "  scan                       list the available APs\n"
-           "  connect <index|ssid> [pw]  connect to an AP\n"
-           "  disconnect                 leave the AP\n"
-           "  wifi_pass [pw|clear]       set/clear the default password\n"
-           "  status                     show the current state\n"
-           "  server_start               start the TCP server\n"
-           "  server_stop                stop the TCP server\n"
-           "  help                       list all commands\n\n");
 
     return ESP_OK;
 }

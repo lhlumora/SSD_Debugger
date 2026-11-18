@@ -47,4 +47,35 @@ menu "Example Configuration"
             are not started automatically. The AP is selected and the server
             is started/stopped with the console commands (scan, connect,
             server_start, server_stop).
+
+    config EXAMPLE_LED_GPIO
+        int "Status LED GPIO number"
+        range -1 48
+        default 21
+        help
+            GPIO the status LED is connected to. The LED is active low: it is
+            lit while the pin is driven low.
+
+            The LED shows the state of the system:
+              fast blink       the system is starting up
+              slow blink       no AP connected
+              solid on         connected to an AP
+              double blink     the TCP server is running
+              rapid blink      error
+
+            Set to -1 to disable the status LED.
+
+    config EXAMPLE_CONSOLE_FORCE_RAW_MODE
+        bool "Force the console line editing mode"
+        default y
+        help
+            The ESP-IDF console checks the capabilities of the terminal with
+            a DSR query (ESC[5n) and disables line editing and history if the
+            answer does not arrive within 500 ms. On USB Serial/JTAG this
+            timeout is easily missed (the boot logs are still being flushed
+            or the monitor is not attached yet), so the raw mode is forced
+            by default.
+
+            Disable this option only if the console is used with a terminal
+            that really does not support escape sequences.
 endmenu

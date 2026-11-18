@@ -20,9 +20,12 @@ the server can be selected at runtime.
 | `connect <index\|ssid> [password]` | Connect to an AP (the password is asked interactively if the AP is protected and no password was given) |
 | `disconnect` | Leave the current AP |
 | `wifi_pass [password\|clear]` | Set / clear the default password used by `connect` |
-| `status` | Show the Wi-Fi state, the IP address and the TCP server state |
+| `status` | Show the Wi-Fi state, the IP address, the TCP server state and the status LED |
 | `server_start` | Start the TCP server (listens on `CONFIG_EXAMPLE_PORT`, 3333 by default) |
 | `server_stop` | Stop the TCP server |
+| `tasks` | List the FreeRTOS tasks (state, priority, core, free stack, run time) |
+| `mem` | Show the memory usage (internal RAM, DMA, PSRAM) |
+| `cpu` | Show the CPU load, measured over one second |
 | `help` | List all commands (built-in) |
 
 Example session:
@@ -59,6 +62,29 @@ Notes:
   console has no way of hiding it.
 * The log output and the REPL prompt share the same port, so the log messages
   may appear in between the prompt lines.
+* The `tasks` and `cpu` commands need the FreeRTOS run time stats, they are
+  enabled in `sdkconfig` (`CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS`).
+* Both cores of the ESP32-S3 run FreeRTOS. The tasks are not pinned, so they
+  can migrate from one core to the other. The `Core` column of the `tasks`
+  command shows the core a task is running on (`*`), the core it is pinned to
+  (a plain number) or `-` when it is not pinned at all.
+
+## Status LED
+
+A status LED can be attached to a GPIO (GPIO21 by default, see menuconfig ->
+Example Configuration Options -> "Status LED GPIO number"). The LED is active
+low: it is lit while the pin is driven low. A dedicated task drives it, the
+pattern shows the state of the system:
+
+| Pattern | State |
+| ------- | ----- |
+| Fast blink | The system is starting up |
+| Slow blink | Not connected to an AP |
+| Solid on | Connected to an AP, the TCP server is stopped |
+| Double blink | The TCP server is running |
+| Rapid blink | Error |
+
+The state currently shown is printed by the `status` command.
 
 ## How to use example
 
