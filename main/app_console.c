@@ -7,8 +7,10 @@
  *   disconnect                disconnect from the AP
  *   wifi_pass [password|clear]  set/clear the default password
  *   status                    show Wi-Fi/IP/TCP server state
- *   server_start              start the TCP server
- *   server_stop               stop the TCP server
+ *   server_start [uartN|all]   start the TCP server of one or all the UARTs
+ *   server_stop [uartN|all]    stop the TCP server of one or all the UARTs
+ *   uart_baud <uartN> <baud>   set the baud rate of a UART
+ *   uart_pins <uartN> <tx> <rx> set the GPIO pins of a UART
  *   help [command]            list the commands / show the help of one command
  */
 #include <stdio.h>
@@ -25,6 +27,7 @@
 #include "linenoise/linenoise.h"
 
 #include "tcp_server.h"
+#include "uart_bridge.h"
 #include "wifi_manager.h"
 #include "sys_stats.h"
 #if CONFIG_EXAMPLE_LED_GPIO >= 0
@@ -373,7 +376,8 @@ static int cmd_connect(int argc, char **argv)
     if (wifi_manager_get_ip(ip, sizeof(ip)) == ESP_OK) {
         printf("Connected, IP address: %s\n", ip);
     }
-    printf("Use 'server_start' to start the TCP server on port %d.\n", tcp_server_port());
+    printf("Use 'server_start uart0' to start the TCP server on port %d.\n",
+           tcp_server_port(0));
     return 0;
 }
 
@@ -425,6 +429,19 @@ static int cmd_wifi_pass(int argc, char **argv)
 /* ------------------------------------------------------------------ */
 /* status                                                              */
 /* ------------------------------------------------------------------ */
+
+/* Format a number of bytes in a short human readable form */
+static void format_bytes(uint32_t bytes, char *buf, size_t len)
+{
+    if (bytes < 1024) {
+        snprintf(buf, len, "%u B", (unsigned)bytes);
+    } else if (bytes < 1024 * 1024) {
+        snprintf(buf, len, "%.1f kB", (double)bytes / 1024.0);
+    } else {
+        snprintf(buf, len, "%.1f MB", (double)bytes / (1024.0 * 1024.0));
+    }
+}
+
 static int cmd_status(int argc, char **argv)
 {
     char ip[16] = { 0 };
@@ -434,54 +451,260 @@ static int cmd_status(int argc, char **argv)
     if (has_ip) {
         printf("IP address: %s\n", ip);
     }
-    printf("TCP server: %s (port %d)\n",
-           tcp_server_is_running() ? "running" : "stopped",
-           tcp_server_port());
+
+    /* List the ports of the servers that are running */
+    char ports[48] = { 0 };
+    int running = 0;
+    for (int i = 0; i < UART_BRIDGE_COUNT; i++) {
+        if (tcp_server_is_running(i)) {
+            char item[16];
+            snprintf(item, sizeof(item), "%s%d", (running > 0) ? ", " : "",
+                     tcp_server_port(i));
+            strncat(ports, item, sizeof(ports) - strlen(ports) - 1);
+            running++;
+        }
+    }
+    if (running > 0) {
+        printf("TCP server: %d running (port%s %s)\n", running,
+               (running > 1) ? "s" : "", ports);
+    } else {
+        printf("TCP server: stopped\n");
+    }
+
 #if CONFIG_EXAMPLE_LED_GPIO >= 0
     printf("LED       : %s\n", led_status_state_name(led_status_get()));
 #endif
+
+    printf("\nUART bridges (rx: TCP->UART, tx: UART->TCP):\n");
+    for (int i = 0; i < UART_BRIDGE_COUNT; i++) {
+        tcp_server_stats_t stats;
+        char rx_text[16];
+        char tx_text[16];
+
+        tcp_server_get_stats(i, &stats);
+        format_bytes(stats.rx_bytes, rx_text, sizeof(rx_text));
+        format_bytes(stats.tx_bytes, tx_text, sizeof(tx_text));
+
+        printf("  UART%d  port %-5d %-8s %-10s rx %-9s tx %s\n", i, stats.port,
+               stats.running ? "running" : "stopped",
+               stats.client ? "connected" : "no client", rx_text, tx_text);
+    }
     return 0;
 }
 
 /* ------------------------------------------------------------------ */
 /* server_start / server_stop                                          */
 /* ------------------------------------------------------------------ */
+
+/* Value of the UART selector that means "every UART" */
+#define UART_SELECT_ALL (-1)
+
+/* Parse a UART selector: "uart0".."uart2", "0".."2" or "all".
+   Returns false when the string is not a valid selector. */
+static bool parse_uart_selector(const char *str, int *uart_num)
+{
+    if (strcmp(str, "all") == 0) {
+        *uart_num = UART_SELECT_ALL;
+        return true;
+    }
+
+    const char *digits = str;
+    if (strncmp(str, "uart", 4) == 0) {
+        digits = str + 4;
+    }
+    if (digits[0] < '0' || digits[0] > '9' || digits[1] != '\0') {
+        return false;
+    }
+
+    int num = digits[0] - '0';
+    if (num >= UART_BRIDGE_COUNT) {
+        return false;
+    }
+    *uart_num = num;
+    return true;
+}
+
+/* Print the list of the valid UART selectors */
+static void print_uart_selectors(void)
+{
+    printf("Valid UARTs: ");
+    for (int i = 0; i < UART_BRIDGE_COUNT; i++) {
+        printf("%suart%d", (i > 0) ? ", " : "", i);
+    }
+    printf(", all\n");
+}
+
+static struct {
+    struct arg_str *uart;
+    struct arg_end *end;
+} server_start_args;
+
+static struct {
+    struct arg_str *uart;
+    struct arg_end *end;
+} server_stop_args;
+
 static int cmd_server_start(int argc, char **argv)
 {
-    if (tcp_server_is_running()) {
-        printf("TCP server is already running on port %d.\n", tcp_server_port());
-        return 0;
+    int nerrors = arg_parse(argc, argv, (void **)&server_start_args);
+    if (nerrors != 0) {
+        arg_print_errors(stderr, server_start_args.end, argv[0]);
+        return 1;
+    }
+
+    int uart_num = UART_SELECT_ALL;
+    if (server_start_args.uart->count > 0) {
+        if (!parse_uart_selector(server_start_args.uart->sval[0], &uart_num)) {
+            printf("Unknown UART '%s'.\n", server_start_args.uart->sval[0]);
+            print_uart_selectors();
+            return 1;
+        }
     }
 
     char ip[16] = { 0 };
-    if (wifi_manager_get_ip(ip, sizeof(ip)) == ESP_OK) {
-        printf("Starting TCP server on port %d (%s)\n", tcp_server_port(), ip);
-    } else {
-        printf("Starting TCP server on port %d (no IP address yet!)\n", tcp_server_port());
+    bool has_ip = (wifi_manager_get_ip(ip, sizeof(ip)) == ESP_OK);
+    int failed = 0;
+
+    for (int i = 0; i < UART_BRIDGE_COUNT; i++) {
+        if (uart_num != UART_SELECT_ALL && i != uart_num) {
+            continue;
+        }
+        if (tcp_server_is_running(i)) {
+            printf("The TCP server of UART%d is already running on port %d.\n",
+                   i, tcp_server_port(i));
+            continue;
+        }
+
+        esp_err_t err = tcp_server_start(i);
+        if (err != ESP_OK) {
+            printf("Failed to start the TCP server of UART%d: %s\n", i,
+                   esp_err_to_name(err));
+            failed++;
+            continue;
+        }
+        if (has_ip) {
+            printf("TCP server of UART%d started on port %d (%s).\n", i,
+                   tcp_server_port(i), ip);
+        } else {
+            printf("TCP server of UART%d started on port %d (no IP address yet!).\n",
+                   i, tcp_server_port(i));
+        }
     }
 
-    esp_err_t err = tcp_server_start();
-    if (err != ESP_OK) {
-        printf("Failed to start the TCP server: %s\n", esp_err_to_name(err));
-        return 1;
-    }
-    printf("TCP server started.\n");
-    return 0;
+    return (failed > 0) ? 1 : 0;
 }
 
 static int cmd_server_stop(int argc, char **argv)
 {
-    if (!tcp_server_is_running()) {
-        printf("TCP server is not running.\n");
-        return 0;
-    }
-
-    esp_err_t err = tcp_server_stop();
-    if (err != ESP_OK) {
-        printf("Failed to stop the TCP server: %s\n", esp_err_to_name(err));
+    int nerrors = arg_parse(argc, argv, (void **)&server_stop_args);
+    if (nerrors != 0) {
+        arg_print_errors(stderr, server_stop_args.end, argv[0]);
         return 1;
     }
-    printf("TCP server stopped.\n");
+
+    int uart_num = UART_SELECT_ALL;
+    if (server_stop_args.uart->count > 0) {
+        if (!parse_uart_selector(server_stop_args.uart->sval[0], &uart_num)) {
+            printf("Unknown UART '%s'.\n", server_stop_args.uart->sval[0]);
+            print_uart_selectors();
+            return 1;
+        }
+    }
+
+    int failed = 0;
+    for (int i = 0; i < UART_BRIDGE_COUNT; i++) {
+        if (uart_num != UART_SELECT_ALL && i != uart_num) {
+            continue;
+        }
+        if (!tcp_server_is_running(i)) {
+            printf("The TCP server of UART%d is not running.\n", i);
+            continue;
+        }
+
+        esp_err_t err = tcp_server_stop(i);
+        if (err != ESP_OK) {
+            printf("Failed to stop the TCP server of UART%d: %s\n", i,
+                   esp_err_to_name(err));
+            failed++;
+            continue;
+        }
+        printf("TCP server of UART%d stopped.\n", i);
+    }
+
+    return (failed > 0) ? 1 : 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* uart_baud / uart_pins                                               */
+/* ------------------------------------------------------------------ */
+
+static struct {
+    struct arg_str *uart;
+    struct arg_int *baud;
+    struct arg_end *end;
+} uart_baud_args;
+
+static struct {
+    struct arg_str *uart;
+    struct arg_int *tx;
+    struct arg_int *rx;
+    struct arg_end *end;
+} uart_pins_args;
+
+static int cmd_uart_baud(int argc, char **argv)
+{
+    int nerrors = arg_parse(argc, argv, (void **)&uart_baud_args);
+    if (nerrors != 0) {
+        arg_print_errors(stderr, uart_baud_args.end, argv[0]);
+        return 1;
+    }
+
+    int uart_num = 0;
+    if (!parse_uart_selector(uart_baud_args.uart->sval[0], &uart_num) ||
+        uart_num == UART_SELECT_ALL) {
+        printf("Unknown UART '%s'.\n", uart_baud_args.uart->sval[0]);
+        print_uart_selectors();
+        return 1;
+    }
+
+    int baud = uart_baud_args.baud->ival[0];
+    esp_err_t err = uart_bridge_set_baudrate(uart_num, baud);
+    if (err != ESP_OK) {
+        printf("Failed to set the baud rate of UART%d: %s\n", uart_num,
+               esp_err_to_name(err));
+        return 1;
+    }
+
+    printf("Baud rate of UART%d set to %d.\n", uart_num, baud);
+    return 0;
+}
+
+static int cmd_uart_pins(int argc, char **argv)
+{
+    int nerrors = arg_parse(argc, argv, (void **)&uart_pins_args);
+    if (nerrors != 0) {
+        arg_print_errors(stderr, uart_pins_args.end, argv[0]);
+        return 1;
+    }
+
+    int uart_num = 0;
+    if (!parse_uart_selector(uart_pins_args.uart->sval[0], &uart_num) ||
+        uart_num == UART_SELECT_ALL) {
+        printf("Unknown UART '%s'.\n", uart_pins_args.uart->sval[0]);
+        print_uart_selectors();
+        return 1;
+    }
+
+    int tx = uart_pins_args.tx->ival[0];
+    int rx = uart_pins_args.rx->ival[0];
+    esp_err_t err = uart_bridge_set_pins(uart_num, tx, rx);
+    if (err != ESP_OK) {
+        printf("Failed to set the pins of UART%d: %s\n", uart_num,
+               esp_err_to_name(err));
+        return 1;
+    }
+
+    printf("Pins of UART%d set to TX=%d RX=%d.\n", uart_num, tx, rx);
     return 0;
 }
 
@@ -545,22 +768,50 @@ static const help_cmd_t s_help_wifi[] = {
 
 static const help_cmd_t s_help_server[] = {
     {
-        .syntax  = "server_start",
-        .summary = "Start the TCP server.",
-        .note    = "  The server listens on the port of the example configuration\n"
-                   "  (CONFIG_EXAMPLE_PORT, 3333 by default). A connection to an\n"
-                   "  access point is required.",
+        .syntax  = "server_start [uartN|all]",
+        .summary = "Start the TCP server of a UART.",
+        .args    = "  <uartN|all>     UART to start: uart0, uart1 or uart2. Without\n"
+                   "                 argument all the UARTs are started.",
+        .note    = "  The port of a UART is 3333 + the number of the UART:\n"
+                   "  UART0 uses the port 3333, UART1 the port 3334 and UART2\n"
+                   "  the port 3335. Only the started servers use their port,\n"
+                   "  the other ones stay available for something else.",
+        .example = "  server_start uart0\n"
+                   "  server_start all",
     },
     {
-        .syntax  = "server_stop",
-        .summary = "Stop the TCP server.",
+        .syntax  = "server_stop [uartN|all]",
+        .summary = "Stop the TCP server of a UART.",
+        .args    = "  <uartN|all>     UART to stop: uart0, uart1 or uart2. Without\n"
+                   "                 argument all the UARTs are stopped.",
+        .example = "  server_stop uart1\n"
+                   "  server_stop all",
+    },
+    {
+        .syntax  = "uart_baud <uartN> <baud>",
+        .summary = "Set the baud rate of a UART.",
+        .args    = "  <uartN>         UART to configure: uart0, uart1 or uart2\n"
+                   "  <baud>          Baud rate in bits per second",
+        .example = "  uart_baud uart1 9600",
+    },
+    {
+        .syntax  = "uart_pins <uartN> <tx> <rx>",
+        .summary = "Set the GPIO pins of a UART.",
+        .args    = "  <uartN>         UART to configure: uart0, uart1 or uart2\n"
+                   "  <tx>            GPIO the TX signal is routed to\n"
+                   "  <rx>            GPIO the RX signal is routed to",
+        .note    = "  The GPIOs 0, 3, 45 and 46 are strapping pins of the\n"
+                   "  ESP32-S3, they should not be used by the UARTs.",
+        .example = "  uart_pins uart2 10 11",
     },
 };
 
 static const help_cmd_t s_help_system[] = {
     {
         .syntax  = "status",
-        .summary = "Show Wi-Fi, IP, TCP server and LED state.",
+        .summary = "Show the system state and the UART state.",
+        .note    = "  The state of the TCP servers, of the clients and the number\n"
+                   "  of bytes transferred by each UART are shown too.",
     },
     {
         .syntax  = "tasks",
@@ -749,21 +1000,59 @@ static void register_console_commands(void)
     };
     ESP_ERROR_CHECK(esp_console_cmd_register(&status_cmd));
 
+    server_start_args.uart = arg_str0(NULL, NULL, "<uartN|all>",
+                                      "UART to start: uart0, uart1, uart2 or all");
+    server_start_args.end = arg_end(1);
     const esp_console_cmd_t server_start_cmd = {
         .command = "server_start",
-        .help = "Start the TCP server",
+        .help = "Start the TCP server of one or of all the UARTs",
         .hint = NULL,
         .func = &cmd_server_start,
+        .argtable = &server_start_args,
     };
     ESP_ERROR_CHECK(esp_console_cmd_register(&server_start_cmd));
 
+    server_stop_args.uart = arg_str0(NULL, NULL, "<uartN|all>",
+                                     "UART to stop: uart0, uart1, uart2 or all");
+    server_stop_args.end = arg_end(1);
     const esp_console_cmd_t server_stop_cmd = {
         .command = "server_stop",
-        .help = "Stop the TCP server",
+        .help = "Stop the TCP server of one or of all the UARTs",
         .hint = NULL,
         .func = &cmd_server_stop,
+        .argtable = &server_stop_args,
     };
     ESP_ERROR_CHECK(esp_console_cmd_register(&server_stop_cmd));
+
+    uart_baud_args.uart = arg_str1(NULL, NULL, "<uartN>",
+                                   "UART to configure: uart0, uart1 or uart2");
+    uart_baud_args.baud = arg_int1(NULL, NULL, "<baud>",
+                                   "baud rate in bits per second");
+    uart_baud_args.end = arg_end(2);
+    const esp_console_cmd_t uart_baud_cmd = {
+        .command = "uart_baud",
+        .help = "Set the baud rate of a UART",
+        .hint = NULL,
+        .func = &cmd_uart_baud,
+        .argtable = &uart_baud_args,
+    };
+    ESP_ERROR_CHECK(esp_console_cmd_register(&uart_baud_cmd));
+
+    uart_pins_args.uart = arg_str1(NULL, NULL, "<uartN>",
+                                   "UART to configure: uart0, uart1 or uart2");
+    uart_pins_args.tx = arg_int1(NULL, NULL, "<tx_gpio>",
+                                 "GPIO the TX signal is routed to");
+    uart_pins_args.rx = arg_int1(NULL, NULL, "<rx_gpio>",
+                                 "GPIO the RX signal is routed to");
+    uart_pins_args.end = arg_end(3);
+    const esp_console_cmd_t uart_pins_cmd = {
+        .command = "uart_pins",
+        .help = "Set the GPIO pins of a UART",
+        .hint = NULL,
+        .func = &cmd_uart_pins,
+        .argtable = &uart_pins_args,
+    };
+    ESP_ERROR_CHECK(esp_console_cmd_register(&uart_pins_cmd));
 
     ESP_ERROR_CHECK(sys_stats_register());
 

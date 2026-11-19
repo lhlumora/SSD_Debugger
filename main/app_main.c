@@ -18,6 +18,7 @@
 #include "app_console.h"
 #include "led_status.h"
 #include "tcp_server.h"
+#include "uart_bridge.h"
 #include "wifi_manager.h"
 
 #if CONFIG_EXAMPLE_AUTOMATIC_MODE
@@ -32,6 +33,10 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
+    /* Prepare the UART peripherals. Their drivers are installed later, when
+       the server of a UART is started from the console. */
+    ESP_ERROR_CHECK(uart_bridge_init());
+
 #if CONFIG_EXAMPLE_LED_GPIO >= 0
     /* The status LED shows the state of the system, it is started first so
        that it already blinks while the rest of the system comes up. */
@@ -39,9 +44,9 @@ void app_main(void)
 #endif
 
 #if CONFIG_EXAMPLE_AUTOMATIC_MODE
-    /* Automatic mode: connect to the configured AP and start the server */
+    /* Automatic mode: connect to the configured AP and start the servers */
     ESP_ERROR_CHECK(example_connect());
-    ESP_ERROR_CHECK(tcp_server_start());
+    ESP_ERROR_CHECK(tcp_server_start_all());
 #else
     /* The log output and the REPL prompt share the same console port,
        so keep the Wi-Fi driver quiet to keep the prompt readable.

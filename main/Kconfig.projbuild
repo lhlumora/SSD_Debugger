@@ -17,6 +17,65 @@ menu "Example Configuration"
         help
             Local port the example server will listen on.
 
+            The TCP server of UART0 uses this port, the servers of UART1 and
+            UART2 use the next ports (3334 and 3335 by default).
+
+    config EXAMPLE_UART_BAUD
+        int "UART baud rate"
+        range 300 921600
+        default 115200
+        help
+            Baud rate of the three UART peripherals (UART0, UART1 and UART2).
+
+            The baud rate can be changed at runtime with the 'uart_baud'
+            console command.
+
+    config EXAMPLE_UART0_TX_GPIO
+        int "UART0 TX GPIO"
+        range 0 48
+        default 43
+        help
+            GPIO the TX signal of UART0 is routed to.
+
+    config EXAMPLE_UART0_RX_GPIO
+        int "UART0 RX GPIO"
+        range 0 48
+        default 44
+        help
+            GPIO the RX signal of UART0 is routed to.
+
+    config EXAMPLE_UART1_TX_GPIO
+        int "UART1 TX GPIO"
+        range 0 48
+        default 17
+        help
+            GPIO the TX signal of UART1 is routed to.
+
+    config EXAMPLE_UART1_RX_GPIO
+        int "UART1 RX GPIO"
+        range 0 48
+        default 18
+        help
+            GPIO the RX signal of UART1 is routed to.
+
+    config EXAMPLE_UART2_TX_GPIO
+        int "UART2 TX GPIO"
+        range 0 48
+        default 15
+        help
+            GPIO the TX signal of UART2 is routed to.
+
+    config EXAMPLE_UART2_RX_GPIO
+        int "UART2 RX GPIO"
+        range 0 48
+        default 16
+        help
+            GPIO the RX signal of UART2 is routed to.
+
+            Note: the GPIOs 0, 3, 45 and 46 are strapping pins of the
+            ESP32-S3, they should not be used by the UARTs. The GPIOs can be
+            changed at runtime with the 'uart_pins' console command.
+
     config EXAMPLE_KEEPALIVE_IDLE
         int "TCP keep-alive idle time(s)"
         default 5

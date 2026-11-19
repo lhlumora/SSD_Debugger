@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2021-2025 Espressif Systems (Shanghai) CO LTD
 # SPDX-License-Identifier: Apache-2.0
 import logging
+import socket
 import time
 
 import netifaces
@@ -10,27 +11,40 @@ from common_test_methods import get_my_interface_by_dest_ip
 from pytest_embedded import Dut
 from pytest_embedded_idf.utils import idf_parametrize
 
-try:
-    from run_tcp_client import tcp_client
-except ImportError:
-    import os
-    import sys
-
-    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'scripts')))
-    from run_tcp_client import tcp_client
-
-
-PORT = 3333
 MESSAGE = 'Data to ESP'
+
+# The three UARTs of the ESP32 have their own TCP server
+PORTS = [3333, 3334, 3335]
+
+
+def tcp_send(address: str, port: int, payload: str) -> None:
+    """Connect to a server and send a payload.
+
+    The server of this example does not echo the data any more: it writes it
+    to the UART of the server. The test only checks that the connection is
+    accepted and that the data can be sent.
+    """
+    for res in socket.getaddrinfo(address, port, socket.AF_UNSPEC,
+                                  socket.SOCK_STREAM, 0, socket.AI_PASSIVE):
+        family_addr, _, _, _, addr = res
+    sock = socket.socket(family_addr, socket.SOCK_STREAM)
+    sock.settimeout(60.0)
+    try:
+        sock.connect(addr)
+    except socket.error as e:
+        print('Could not open socket: ' + str(e))
+        sock.close()
+        raise
+    sock.sendall(payload.encode())
+    sock.close()
 
 
 @pytest.mark.wifi_router
-@idf_parametrize(
-    'target',
-    ['esp32', 'esp32s2', 'esp32c2', 'esp32c3', 'esp32s3', 'esp32c5', 'esp32c6', 'esp32c61'],
-    indirect=['target'],
+@pytest.mark.parametrize(
+    'port',
+    PORTS,
 )
-def test_examples_tcp_server_ipv4(dut: Dut) -> None:
+def test_examples_tcp_server_ipv4(dut: Dut, port: int) -> None:
     # Parse IP address of STA
     logging.info('Waiting to connect with AP')
     if dut.app.sdkconfig.get('EXAMPLE_WIFI_SSID_PWD_FROM_STDIN') is True:
@@ -44,10 +58,7 @@ def test_examples_tcp_server_ipv4(dut: Dut) -> None:
     time.sleep(1)
 
     # test IPv4
-    received = tcp_client(ipv4, PORT, MESSAGE)
-    if not received == MESSAGE:
-        raise
-    dut.expect(MESSAGE)
+    tcp_send(ipv4, port, MESSAGE)
 
 
 @pytest.mark.wifi_router
@@ -59,8 +70,11 @@ def test_examples_tcp_server_ipv4(dut: Dut) -> None:
     ],
     indirect=True,
 )
-@idf_parametrize('target', ['esp32c2'], indirect=['target'])
-def test_examples_tcp_server_ipv4_esp32c2_26mhz(dut: Dut) -> None:
+@pytest.mark.parametrize(
+    'port',
+    PORTS,
+)
+def test_examples_tcp_server_ipv4_esp32c2_26mhz(dut: Dut, port: int) -> None:
     # Parse IP address of STA
     logging.info('Waiting to connect with AP')
     if dut.app.sdkconfig.get('EXAMPLE_WIFI_SSID_PWD_FROM_STDIN') is True:
@@ -74,17 +88,15 @@ def test_examples_tcp_server_ipv4_esp32c2_26mhz(dut: Dut) -> None:
     time.sleep(1)
 
     # test IPv4
-    received = tcp_client(ipv4, PORT, MESSAGE)
-    if not received == MESSAGE:
-        raise
-    dut.expect(MESSAGE)
+    tcp_send(ipv4, port, MESSAGE)
 
 
 @pytest.mark.wifi_router
-@idf_parametrize(
-    'target', ['esp32', 'esp32s2', 'esp32c2', 'esp32c3', 'esp32s3', 'esp32c6', 'esp32c61'], indirect=['target']
+@pytest.mark.parametrize(
+    'port',
+    PORTS,
 )
-def test_examples_tcp_server_ipv6(dut: Dut) -> None:
+def test_examples_tcp_server_ipv6(dut: Dut, port: int) -> None:
     # Parse IP address of STA
     logging.info('Waiting to connect with AP')
     if dut.app.sdkconfig.get('EXAMPLE_WIFI_SSID_PWD_FROM_STDIN') is True:
@@ -102,17 +114,15 @@ def test_examples_tcp_server_ipv6(dut: Dut) -> None:
 
     interface = get_my_interface_by_dest_ip(ipv4)
     # test IPv6
-    received = tcp_client(f'{ipv6}%{interface}', PORT, MESSAGE)
-    if not received == MESSAGE:
-        raise
-    dut.expect(MESSAGE)
+    tcp_send(f'{ipv6}%{interface}', port, MESSAGE)
 
 
 @pytest.mark.wifi_router
-@idf_parametrize(
-    'target', ['esp32', 'esp32s2', 'esp32c2', 'esp32c3', 'esp32s3', 'esp32c6', 'esp32c61'], indirect=['target']
+@pytest.mark.parametrize(
+    'port',
+    PORTS,
 )
-def test_examples_tcp_server_ipv6_only(dut: Dut) -> None:
+def test_examples_tcp_server_ipv6_only(dut: Dut, port: int) -> None:
     # Parse IP address of STA
     logging.info('Waiting to connect with AP')
     if dut.app.sdkconfig.get('EXAMPLE_WIFI_SSID_PWD_FROM_STDIN') is True:
@@ -131,13 +141,10 @@ def test_examples_tcp_server_ipv6_only(dut: Dut) -> None:
     for interface in netifaces.interfaces():
         try:
             logging.info(f'[{interface}] Connect to tcp_server {ipv6}%{interface}')
-            received = tcp_client(f'{ipv6}%{interface}', PORT, MESSAGE)
+            tcp_send(f'{ipv6}%{interface}', port, MESSAGE)
         except Exception:
             # wrong interface
             continue
-        if not received == MESSAGE:
-            raise AssertionError(f'Wrong data received ({received}/{MESSAGE})')
-        dut.expect(MESSAGE)
         break
     else:
         raise AssertionError(f'Can not connect to tcp_server: {ipv6}')

@@ -93,7 +93,7 @@ static led_state_t detect_state(void)
     if (!wifi_manager_is_connected()) {
         return LED_STATE_WIFI_DOWN;
     }
-    if (tcp_server_is_running()) {
+    if (tcp_server_any_running()) {
         return LED_STATE_SERVER_RUN;
     }
     return LED_STATE_WIFI_UP;
