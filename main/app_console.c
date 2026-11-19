@@ -9,7 +9,7 @@
  *   status                    show Wi-Fi/IP/TCP server state
  *   server_start              start the TCP server
  *   server_stop               stop the TCP server
- *   help                      built-in help
+ *   help [command]            list the commands / show the help of one command
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -111,18 +111,29 @@ static int codepoint_width(uint32_t cp)
     return 1;
 }
 
-/* Display width of a NUL terminated UTF-8 string, in terminal columns */
-static int utf8_display_width(const char *str)
+/* Display width of the first @p len bytes of a UTF-8 string, in terminal
+   columns */
+static int utf8_width_n(const char *str, size_t len)
 {
     int width = 0;
 
-    while (*str != '\0') {
+    while (len > 0 && *str != '\0') {
         uint32_t cp;
-        int len = utf8_decode(str, &cp);
-        str += len;
+        int used = utf8_decode(str, &cp);
+        if ((size_t)used > len) {
+            break;
+        }
+        str += used;
+        len -= (size_t)used;
         width += codepoint_width(cp);
     }
     return width;
+}
+
+/* Display width of a NUL terminated UTF-8 string, in terminal columns */
+static int utf8_display_width(const char *str)
+{
+    return utf8_width_n(str, strlen(str));
 }
 
 /* Print @p str so that it occupies exactly @p width terminal columns.
@@ -163,6 +174,71 @@ static void print_column(const char *str, int width)
     printf("%.*s...", printed, str);
     for (int i = used + 3; i < width; i++) {
         putchar(' ');
+    }
+}
+
+/* Print @p text at the current position, wrapping the lines so that they do
+   not exceed @p width terminal columns. The continuation lines are indented
+   with @p col spaces, so that they stay aligned with the first line.
+   The text must not contain any newline. */
+static void print_wrapped(const char *text, int col, int width)
+{
+    const char *p = text;
+    int cur = col;
+    bool first = true;
+
+    while (*p != '\0') {
+        while (*p == ' ') {
+            p++;
+        }
+        if (*p == '\0') {
+            break;
+        }
+
+        const char *word = p;
+        while (*p != '\0' && *p != ' ') {
+            p++;
+        }
+        size_t len = (size_t)(p - word);
+        bool more = (*p != '\0');
+        if (more) {
+            p++;
+        }
+
+        int word_width = utf8_width_n(word, len);
+
+        if (!first) {
+            /* The separator is printed only when the word stays on the same
+               line, so that no line ends with a space. */
+            if (cur + 1 + word_width > width) {
+                printf("\n%*s", col, "");
+                cur = col;
+            } else {
+                putchar(' ');
+                cur++;
+            }
+        }
+        printf("%.*s", (int)len, word);
+        cur += word_width;
+        first = false;
+    }
+}
+
+/* Print a pre-formatted block of text, indenting every line with @p indent
+   spaces. The relative indentation of the lines is preserved. */
+static void print_block(const char *text, int indent)
+{
+    const char *line = text;
+
+    while (*line != '\0') {
+        const char *eol = strchr(line, '\n');
+        size_t len = (eol != NULL) ? (size_t)(eol - line) : strlen(line);
+
+        printf("%*s%.*s\n", indent, "", (int)len, line);
+        if (eol == NULL) {
+            break;
+        }
+        line = eol + 1;
     }
 }
 
@@ -410,6 +486,218 @@ static int cmd_server_stop(int argc, char **argv)
 }
 
 /* ------------------------------------------------------------------ */
+/* help                                                                */
+/* ------------------------------------------------------------------ */
+
+/* Target width of the help output, in terminal columns */
+#define HELP_WIDTH 80
+/* Indentation of a command line in the command list */
+#define HELP_INDENT 4
+
+/* Description of a single command, shown by the 'help' command. */
+typedef struct {
+    const char *syntax;   /* command name followed by its arguments */
+    const char *summary;  /* one line description */
+    const char *args;     /* description of the arguments, may be NULL */
+    const char *note;     /* additional note, may be NULL */
+    const char *example;  /* usage examples, may be NULL */
+} help_cmd_t;
+
+/* A group of related commands, printed under a common title. */
+typedef struct {
+    const char *title;     /* title of the group */
+    const help_cmd_t *cmds;
+    size_t count;
+} help_group_t;
+
+static const help_cmd_t s_help_wifi[] = {
+    {
+        .syntax  = "scan",
+        .summary = "Scan for the surrounding access points.",
+        .note    = "  The results are numbered from 1, the number of a result can\n"
+                   "  be given to 'connect'.",
+    },
+    {
+        .syntax  = "connect <ssid|index> [password]",
+        .summary = "Connect to a Wi-Fi access point.",
+        .args    = "  <ssid|index>   SSID of the access point, or the index of a\n"
+                   "                 'scan' result (counting from 1)\n"
+                   "  <password>     Password of the access point. When it is omitted,\n"
+                   "                 the default password (see 'wifi_pass') is used,\n"
+                   "                 or it is asked for interactively",
+        .example = "  connect 1\n"
+                   "  connect MyAP mysecret",
+    },
+    {
+        .syntax  = "disconnect",
+        .summary = "Disconnect from the current access point.",
+    },
+    {
+        .syntax  = "wifi_pass [password|clear]",
+        .summary = "Get, set or clear the default password.",
+        .args    = "  <password>     Password of the access point. The value 'clear'\n"
+                   "                 removes the stored password. Without argument\n"
+                   "                 the current value is shown",
+        .example = "  wifi_pass mysecret\n"
+                   "  wifi_pass clear",
+    },
+};
+
+static const help_cmd_t s_help_server[] = {
+    {
+        .syntax  = "server_start",
+        .summary = "Start the TCP server.",
+        .note    = "  The server listens on the port of the example configuration\n"
+                   "  (CONFIG_EXAMPLE_PORT, 3333 by default). A connection to an\n"
+                   "  access point is required.",
+    },
+    {
+        .syntax  = "server_stop",
+        .summary = "Stop the TCP server.",
+    },
+};
+
+static const help_cmd_t s_help_system[] = {
+    {
+        .syntax  = "status",
+        .summary = "Show Wi-Fi, IP, TCP server and LED state.",
+    },
+    {
+        .syntax  = "tasks",
+        .summary = "List the FreeRTOS tasks.",
+    },
+    {
+        .syntax  = "mem",
+        .summary = "Show the memory usage.",
+    },
+    {
+        .syntax  = "cpu",
+        .summary = "Show the CPU load (1 second measurement).",
+        .note    = "  The console is blocked during the one second measurement.",
+    },
+};
+
+static const help_cmd_t s_help_general[] = {
+    {
+        .syntax  = "help [command]",
+        .summary = "Show this help, or the help of a command.",
+    },
+};
+
+static const help_group_t s_help_groups[] = {
+    { "Wi-Fi",       s_help_wifi,    sizeof(s_help_wifi) / sizeof(s_help_wifi[0]) },
+    { "TCP server", s_help_server,  sizeof(s_help_server) / sizeof(s_help_server[0]) },
+    { "System",     s_help_system,  sizeof(s_help_system) / sizeof(s_help_system[0]) },
+    { "Help",       s_help_general, sizeof(s_help_general) / sizeof(s_help_general[0]) },
+};
+
+#define HELP_GROUP_COUNT (sizeof(s_help_groups) / sizeof(s_help_groups[0]))
+
+/* Find the command named @p name, return NULL when there is no such command */
+static const help_cmd_t *help_find_command(const char *name)
+{
+    size_t len = strlen(name);
+
+    for (size_t g = 0; g < HELP_GROUP_COUNT; g++) {
+        for (size_t i = 0; i < s_help_groups[g].count; i++) {
+            const char *syntax = s_help_groups[g].cmds[i].syntax;
+            if (strncmp(syntax, name, len) == 0 &&
+                (syntax[len] == '\0' || syntax[len] == ' ')) {
+                return &s_help_groups[g].cmds[i];
+            }
+        }
+    }
+    return NULL;
+}
+
+/* Print the list of the available commands, grouped by topic */
+static void help_print_list(void)
+{
+    int syntax_width = 0;
+
+    /* All the commands are aligned on the same column, so that the
+       descriptions can be scanned down the whole list */
+    for (size_t g = 0; g < HELP_GROUP_COUNT; g++) {
+        for (size_t i = 0; i < s_help_groups[g].count; i++) {
+            int width = utf8_display_width(s_help_groups[g].cmds[i].syntax);
+            if (width > syntax_width) {
+                syntax_width = width;
+            }
+        }
+    }
+    syntax_width += 2;     /* gap between the syntax and the description */
+
+    printf("\nAvailable commands ('help <command>' shows the details of one"
+           " command):\n");
+
+    for (size_t g = 0; g < HELP_GROUP_COUNT; g++) {
+        const help_group_t *group = &s_help_groups[g];
+
+        printf("\n  %s\n", group->title);
+        for (size_t i = 0; i < group->count; i++) {
+            const help_cmd_t *cmd = &group->cmds[i];
+
+            printf("%*s", HELP_INDENT, "");
+            print_column(cmd->syntax, syntax_width);
+            print_wrapped(cmd->summary, HELP_INDENT + syntax_width, HELP_WIDTH);
+            printf("\n");
+        }
+    }
+    printf("\n");
+}
+
+/* Print the detailed help of a single command */
+static void help_print_details(const help_cmd_t *cmd)
+{
+    printf("\n  %s\n", cmd->syntax);
+
+    printf("%*s", HELP_INDENT, "");
+    print_wrapped(cmd->summary, HELP_INDENT, HELP_WIDTH);
+    printf("\n");
+
+    if (cmd->args != NULL) {
+        printf("\n%*sArguments:\n", HELP_INDENT, "");
+        print_block(cmd->args, HELP_INDENT);
+    }
+
+    if (cmd->note != NULL) {
+        printf("\n%*sNote:\n", HELP_INDENT, "");
+        print_block(cmd->note, HELP_INDENT);
+    }
+
+    if (cmd->example != NULL) {
+        printf("\n%*sExample:\n", HELP_INDENT, "");
+        print_block(cmd->example, HELP_INDENT);
+    }
+    printf("\n");
+}
+
+static int cmd_help(int argc, char **argv)
+{
+    if (argc < 2) {
+        help_print_list();
+        return 0;
+    }
+
+    const char *name = argv[1];
+    if (name[0] == '-') {
+        printf("help: unknown option '%s'.\n", name);
+        printf("Usage: help [command]\n");
+        return 1;
+    }
+
+    const help_cmd_t *cmd = help_find_command(name);
+    if (cmd == NULL) {
+        printf("help: unknown command '%s'.\n", name);
+        printf("Type 'help' to list the available commands.\n");
+        return 1;
+    }
+
+    help_print_details(cmd);
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* registration                                                        */
 /* ------------------------------------------------------------------ */
 static void register_console_commands(void)
@@ -478,6 +766,17 @@ static void register_console_commands(void)
     ESP_ERROR_CHECK(esp_console_cmd_register(&server_stop_cmd));
 
     ESP_ERROR_CHECK(sys_stats_register());
+
+    /* This replaces the 'help' command of the ESP-IDF console: the built-in
+       one prints every command on several lines, which is hard to read on a
+       terminal of 80 columns. */
+    const esp_console_cmd_t help_cmd = {
+        .command = "help",
+        .help = "Show the list of commands, or the details of one command",
+        .hint = "[command]",
+        .func = &cmd_help,
+    };
+    ESP_ERROR_CHECK(esp_console_cmd_register(&help_cmd));
 }
 
 esp_err_t app_console_start(void)
