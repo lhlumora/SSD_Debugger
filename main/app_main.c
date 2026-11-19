@@ -17,6 +17,7 @@
 
 #include "app_console.h"
 #include "led_status.h"
+#include "lcd_display.h"
 #include "tcp_server.h"
 #include "uart_bridge.h"
 #include "wifi_manager.h"
@@ -41,6 +42,14 @@ void app_main(void)
     /* The status LED shows the state of the system, it is started first so
        that it already blinks while the rest of the system comes up. */
     ESP_ERROR_CHECK(led_status_init(CONFIG_EXAMPLE_LED_GPIO));
+#endif
+
+#if CONFIG_EXAMPLE_LCD_ENABLE
+    /* The display shows the dashboard of the system. A failure of the display
+       must not stop the application, the error is only logged. */
+    if (lcd_display_init() != ESP_OK) {
+        ESP_LOGE(TAG, "The display could not be initialized");
+    }
 #endif
 
 #if CONFIG_EXAMPLE_AUTOMATIC_MODE

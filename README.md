@@ -28,6 +28,9 @@ the servers can be selected at runtime.
 | `tasks` | List the FreeRTOS tasks (state, priority, core, free stack, run time) |
 | `mem` | Show the memory usage (internal RAM, DMA, PSRAM) |
 | `cpu` | Show the CPU load, measured over one second |
+| `lcd_info` | Show the settings of the display |
+| `lcd_backlight [on\|off]` | Switch the backlight of the display on or off |
+| `lcd_rotate [degrees]` | Rotate the screen of the display |
 | `help [command]` | List all the commands, or show the details of one command |
 
 Example session:
@@ -128,6 +131,48 @@ pattern shows the state of the system:
 | Rapid blink | Error |
 
 The state currently shown is printed by the `status` command.
+
+## Display (ST7735S + LVGL)
+
+A ST7735S display (0.96 inch, 80x160 pixels) can be attached to the SPI bus
+of the board. It is driven by [LVGL](https://lvgl.io/) and shows a dashboard of
+the system: the state of the Wi-Fi connection, the IP address, the TCP servers,
+the CPU load, the free memory and the running time. The dot in the title bar
+shows the state of the status LED.
+
+The wiring of the display (7 pins, the module has also a VCC and a GND pin):
+
+| Signal | Description | Default GPIO |
+| ------ | ----------- | ------------ |
+| SCL    | SPI clock | 12 |
+| SDA    | SPI data (MOSI) | 11 |
+| CS     | Chip select | 10 |
+| DC     | Data / command | 9 |
+| RES    | Reset | 8 |
+| BL     | Backlight | 7 |
+
+All the pins are configurable in menuconfig -> Example Configuration Options ->
+Display (ST7735S). The backlight can be switched off when it is not connected
+to a GPIO (set its number to -1), the polarity of the backlight can be
+inverted as well.
+
+The dashboard is refreshed every second. The display can be controlled from the
+console:
+
+| Command | Description |
+| ------- | ----------- |
+| `lcd_info` | Show the settings of the display |
+| `lcd_backlight [on\|off]` | Switch the backlight on or off |
+| `lcd_rotate [degrees]` | Rotate the screen (0, 90, 180 or 270) |
+
+Notes:
+
+* The screen uses the SPI2 peripheral, the other peripherals of the board
+  (the three UARTs) are not affected.
+* The partition table of the project was enlarged (`partitions.csv`), the
+  LVGL library needs about 400 kB of flash.
+* The configuration of LVGL is in `main/lv_conf.h`: the color format, the
+  memory allocator, the fonts and the widgets that are compiled in.
 
 ## How to use example
 

@@ -30,6 +30,10 @@
 #include "uart_bridge.h"
 #include "wifi_manager.h"
 #include "sys_stats.h"
+#if CONFIG_EXAMPLE_LCD_ENABLE
+#include "lcd_display.h"
+#include "st7735.h"
+#endif
 #if CONFIG_EXAMPLE_LED_GPIO >= 0
 #include "led_status.h"
 #endif
@@ -709,6 +713,195 @@ static int cmd_uart_pins(int argc, char **argv)
 }
 
 /* ------------------------------------------------------------------ */
+/* lcd_backlight / lcd_rotate                                          */
+/* ------------------------------------------------------------------ */
+
+#if CONFIG_EXAMPLE_LCD_ENABLE
+
+static int cmd_lcd_backlight(int argc, char **argv)
+{
+    if (!lcd_display_is_ready()) {
+        printf("The display is not initialized.\n");
+        return 1;
+    }
+
+    if (argc < 2) {
+        printf("The backlight is %s.\n",
+               lcd_display_backlight_is_on() ? "on" : "off");
+        return 0;
+    }
+
+    if (strcmp(argv[1], "on") == 0) {
+        lcd_display_set_backlight(true);
+    } else if (strcmp(argv[1], "off") == 0) {
+        lcd_display_set_backlight(false);
+    } else {
+        printf("Usage: lcd_backlight [on|off]\n");
+        return 1;
+    }
+
+    printf("The backlight is %s.\n", lcd_display_backlight_is_on() ? "on" : "off");
+    return 0;
+}
+
+static int cmd_lcd_rotate(int argc, char **argv)
+{
+    if (!lcd_display_is_ready()) {
+        printf("The display is not initialized.\n");
+        return 1;
+    }
+
+    if (argc < 2) {
+        printf("The screen is rotated by %d degrees.\n", lcd_display_get_rotation());
+        return 0;
+    }
+
+    const int rotation = atoi(argv[1]);
+    esp_err_t err = lcd_display_set_rotation(rotation);
+    if (err != ESP_OK) {
+        printf("Failed to rotate the screen: %s\n", esp_err_to_name(err));
+        return 1;
+    }
+
+    int width = 0;
+    int height = 0;
+    lcd_display_get_size(&width, &height);
+    printf("The screen is rotated by %d degrees (%dx%d).\n", rotation, width, height);
+    return 0;
+}
+
+static int cmd_lcd_info(int argc, char **argv)
+{
+    if (!lcd_display_is_ready()) {
+        printf("The display is not initialized.\n");
+        return 1;
+    }
+
+    int width = 0;
+    int height = 0;
+    lcd_display_get_size(&width, &height);
+
+    printf("Display: ST7735S %dx%d, rotation %d, backlight %s\n",
+           width, height, lcd_display_get_rotation(),
+           lcd_display_backlight_is_on() ? "on" : "off");
+    printf("SPI: SCLK=%d SDA=%d CS=%d DC=%d RES=%d BL=%d, %d Hz\n",
+           CONFIG_EXAMPLE_LCD_SCLK_GPIO, CONFIG_EXAMPLE_LCD_MOSI_GPIO,
+           CONFIG_EXAMPLE_LCD_CS_GPIO, CONFIG_EXAMPLE_LCD_DC_GPIO,
+           CONFIG_EXAMPLE_LCD_RST_GPIO, CONFIG_EXAMPLE_LCD_BL_GPIO,
+           st7735_get_clock());
+    return 0;
+}
+
+static int cmd_lcd_test(int argc, char **argv)
+{
+    if (!lcd_display_is_ready()) {
+        printf("The display is not initialized.\n");
+        return 1;
+    }
+
+    if (argc < 2) {
+        printf("Usage: lcd_test [raw|pattern|red|green|blue|white|black]\n");
+        return 1;
+    }
+
+    /* The test patterns are drawn without LVGL, they show if the panel is
+       driven correctly. */
+    if (strcmp(argv[1], "raw") == 0) {
+        /* The whole memory of the controller is filled, the visible area of
+           the module shows it whatever its offset is */
+        if (st7735_fill_raw(0x07E0) != ESP_OK) {
+            printf("Failed to fill the memory of the controller.\n");
+            return 1;
+        }
+        printf("The memory of the controller is filled with green.\n");
+        return 0;
+    }
+
+    if (strcmp(argv[1], "pattern") == 0) {
+        if (st7735_draw_test_pattern() != ESP_OK) {
+            printf("Failed to draw the test pattern.\n");
+            return 1;
+        }
+        printf("Test pattern drawn.\n");
+        return 0;
+    }
+
+    uint16_t color;
+    if (strcmp(argv[1], "red") == 0) {
+        color = 0xF800;
+    } else if (strcmp(argv[1], "green") == 0) {
+        color = 0x07E0;
+    } else if (strcmp(argv[1], "blue") == 0) {
+        color = 0x001F;
+    } else if (strcmp(argv[1], "white") == 0) {
+        color = 0xFFFF;
+    } else if (strcmp(argv[1], "black") == 0) {
+        color = 0x0000;
+    } else {
+        printf("Usage: lcd_test [raw|pattern|red|green|blue|white|black]\n");
+        return 1;
+    }
+
+    if (st7735_fill(color) != ESP_OK) {
+        printf("Failed to fill the screen.\n");
+        return 1;
+    }
+    printf("The screen is filled with %s.\n", argv[1]);
+    return 0;
+}
+
+static int cmd_lcd_clock(int argc, char **argv)
+{
+    if (!lcd_display_is_ready()) {
+        printf("The display is not initialized.\n");
+        return 1;
+    }
+
+    if (argc < 2) {
+        printf("The SPI clock of the display is %d Hz.\n", st7735_get_clock());
+        return 0;
+    }
+
+    const int clock = atoi(argv[1]);
+    if (st7735_set_clock(clock) != ESP_OK) {
+        printf("Failed to set the speed of the SPI bus.\n");
+        return 1;
+    }
+
+    printf("The SPI clock of the display is %d Hz.\n", st7735_get_clock());
+    return 0;
+}
+
+static int cmd_lcd_offset(int argc, char **argv)
+{
+    if (!lcd_display_is_ready()) {
+        printf("The display is not initialized.\n");
+        return 1;
+    }
+
+    int col = 0;
+    int row = 0;
+    st7735_get_offset(&col, &row);
+
+    if (argc < 3) {
+        printf("The offset of the visible area is %d/%d.\n", col, row);
+        return 0;
+    }
+
+    const int new_col = atoi(argv[1]);
+    const int new_row = atoi(argv[2]);
+    if (st7735_set_offset(new_col, new_row) != ESP_OK) {
+        printf("Invalid offset.\n");
+        return 1;
+    }
+
+    printf("The offset of the visible area is %d/%d.\n", new_col, new_row);
+    return 0;
+}
+
+#endif /* CONFIG_EXAMPLE_LCD_ENABLE */
+
+/* ------------------------------------------------------------------ */
 /* help                                                                */
 /* ------------------------------------------------------------------ */
 
@@ -828,6 +1021,59 @@ static const help_cmd_t s_help_system[] = {
     },
 };
 
+#if CONFIG_EXAMPLE_LCD_ENABLE
+static const help_cmd_t s_help_display[] = {
+    {
+        .syntax  = "lcd_info",
+        .summary = "Show the settings of the display.",
+    },
+    {
+        .syntax  = "lcd_backlight [on|off]",
+        .summary = "Switch the backlight of the display on or off.",
+        .args    = "  <on|off>         State of the backlight. Without argument the\n"
+                   "                 current state is shown",
+        .example = "  lcd_backlight off",
+    },
+    {
+        .syntax  = "lcd_rotate [degrees]",
+        .summary = "Rotate the screen of the display.",
+        .args    = "  <degrees>        0, 90, 180 or 270. Without argument the\n"
+                   "                 current orientation is shown",
+        .example = "  lcd_rotate 90",
+    },
+    {
+        .syntax  = "lcd_test [pattern|color]",
+        .summary = "Draw a test pattern on the display.",
+        .args    = "  <pattern|color>  'pattern' draws a border and four colored\n"
+                   "                 blocks, a color ('red', 'green', 'blue',\n"
+                   "                 'white' or 'black') fills the screen",
+        .note    = "  The test patterns are drawn without LVGL, they show if\n"
+                   "  the panel is driven correctly.",
+        .example = "  lcd_test pattern\n"
+                   "  lcd_test white",
+    },
+    {
+        .syntax  = "lcd_clock [hz]",
+        .summary = "Show or set the speed of the SPI bus of the display.",
+        .args    = "  <hz>             Speed of the SPI bus in Hz. A lower speed\n"
+                   "                 can be needed when the module is connected\n"
+                   "                 with long wires",
+        .example = "  lcd_clock 2000000",
+    },
+    {
+        .syntax  = "lcd_offset [col row]",
+        .summary = "Show or set the offset of the visible area.",
+        .args    = "  <col>            Offset of the first column in the memory\n"
+                   "  <row>            Offset of the first row in the memory",
+        .note    = "  The controller has 132x162 pixels of memory, the visible\n"
+                   "  area of the module is smaller and offset in it. The\n"
+                   "  offset is 26/1 for the green modules and 24/0 for the\n"
+                   "  red ones.",
+        .example = "  lcd_offset 24 0",
+    },
+};
+#endif
+
 static const help_cmd_t s_help_general[] = {
     {
         .syntax  = "help [command]",
@@ -839,6 +1085,9 @@ static const help_group_t s_help_groups[] = {
     { "Wi-Fi",       s_help_wifi,    sizeof(s_help_wifi) / sizeof(s_help_wifi[0]) },
     { "TCP server", s_help_server,  sizeof(s_help_server) / sizeof(s_help_server[0]) },
     { "System",     s_help_system,  sizeof(s_help_system) / sizeof(s_help_system[0]) },
+#if CONFIG_EXAMPLE_LCD_ENABLE
+    { "Display",    s_help_display, sizeof(s_help_display) / sizeof(s_help_display[0]) },
+#endif
     { "Help",       s_help_general, sizeof(s_help_general) / sizeof(s_help_general[0]) },
 };
 
@@ -1055,6 +1304,56 @@ static void register_console_commands(void)
     ESP_ERROR_CHECK(esp_console_cmd_register(&uart_pins_cmd));
 
     ESP_ERROR_CHECK(sys_stats_register());
+
+#if CONFIG_EXAMPLE_LCD_ENABLE
+    const esp_console_cmd_t lcd_backlight_cmd = {
+        .command = "lcd_backlight",
+        .help = "Switch the backlight of the display on or off",
+        .hint = "[on|off]",
+        .func = &cmd_lcd_backlight,
+    };
+    ESP_ERROR_CHECK(esp_console_cmd_register(&lcd_backlight_cmd));
+
+    const esp_console_cmd_t lcd_rotate_cmd = {
+        .command = "lcd_rotate",
+        .help = "Rotate the screen of the display",
+        .hint = "[degrees]",
+        .func = &cmd_lcd_rotate,
+    };
+    ESP_ERROR_CHECK(esp_console_cmd_register(&lcd_rotate_cmd));
+
+    const esp_console_cmd_t lcd_info_cmd = {
+        .command = "lcd_info",
+        .help = "Show the settings of the display",
+        .hint = NULL,
+        .func = &cmd_lcd_info,
+    };
+    ESP_ERROR_CHECK(esp_console_cmd_register(&lcd_info_cmd));
+
+    const esp_console_cmd_t lcd_test_cmd = {
+        .command = "lcd_test",
+        .help = "Draw a test pattern on the display",
+        .hint = "[pattern|red|green|blue|white|black]",
+        .func = &cmd_lcd_test,
+    };
+    ESP_ERROR_CHECK(esp_console_cmd_register(&lcd_test_cmd));
+
+    const esp_console_cmd_t lcd_clock_cmd = {
+        .command = "lcd_clock",
+        .help = "Show or set the speed of the SPI bus of the display",
+        .hint = "[hz]",
+        .func = &cmd_lcd_clock,
+    };
+    ESP_ERROR_CHECK(esp_console_cmd_register(&lcd_clock_cmd));
+
+    const esp_console_cmd_t lcd_offset_cmd = {
+        .command = "lcd_offset",
+        .help = "Show or set the offset of the visible area",
+        .hint = "[col row]",
+        .func = &cmd_lcd_offset,
+    };
+    ESP_ERROR_CHECK(esp_console_cmd_register(&lcd_offset_cmd));
+#endif
 
     /* This replaces the 'help' command of the ESP-IDF console: the built-in
        one prints every command on several lines, which is hard to read on a

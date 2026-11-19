@@ -48,6 +48,55 @@ typedef struct {
     uint32_t runtime_ms;
 } task_usage_t;
 
+/* The CPU load measured in the background, in percent of one core */
+static volatile unsigned s_cpu_load;
+/* The CPU load of each core, in percent */
+static volatile unsigned s_core_load[configNUMBER_OF_CORES];
+
+/* The task that measures the CPU load in the background */
+static void load_task(void *arg)
+{
+    configRUN_TIME_COUNTER_TYPE idle_before[configNUMBER_OF_CORES];
+    configRUN_TIME_COUNTER_TYPE idle_after[configNUMBER_OF_CORES];
+    uint32_t total_before = 0;
+    uint32_t total_after = 0;
+
+    while (true) {
+        for (BaseType_t core = 0; core < configNUMBER_OF_CORES; core++) {
+            idle_before[core] = ulTaskGetIdleRunTimeCounterForCore(core);
+        }
+        total_before = (uint32_t)esp_timer_get_time();
+
+        vTaskDelay(pdMS_TO_TICKS(1000));
+
+        for (BaseType_t core = 0; core < configNUMBER_OF_CORES; core++) {
+            idle_after[core] = ulTaskGetIdleRunTimeCounterForCore(core);
+        }
+        total_after = (uint32_t)esp_timer_get_time();
+
+        const int64_t elapsed = (int64_t)total_after - (int64_t)total_before;
+        if (elapsed <= 0) {
+            continue;
+        }
+
+        /* The load of a core is the time that was not spent in its idle task */
+        unsigned busy = 0;
+        for (BaseType_t core = 0; core < configNUMBER_OF_CORES; core++) {
+            uint32_t idle = 0;
+            if (idle_after[core] >= idle_before[core]) {
+                idle = idle_after[core] - idle_before[core];
+            }
+            unsigned load = (unsigned)((100 * (uint64_t)elapsed - 100 * (uint64_t)idle) / (uint64_t)elapsed);
+            if (load > 100) {
+                load = 100;
+            }
+            s_core_load[core] = load;
+            busy += load;
+        }
+        s_cpu_load = busy;
+    }
+}
+
 static const char *state_str(eTaskState state)
 {
     switch (state) {
@@ -345,6 +394,17 @@ static int cmd_cpu(int argc, char **argv)
 /* ------------------------------------------------------------------ */
 esp_err_t sys_stats_register(void)
 {
+    /* The task that measures the CPU load in the background, it is used by
+       the dashboard of the display */
+    static bool load_task_started;
+    if (!load_task_started) {
+        load_task_started = true;
+        if (xTaskCreate(load_task, "cpu_load", 3072, NULL, 1, NULL) != pdTRUE) {
+            ESP_LOGE(TAG, "Failed to create the CPU load task");
+            load_task_started = false;
+        }
+    }
+
     const esp_console_cmd_t tasks_cmd = {
         .command = "tasks",
         .help = "List the FreeRTOS tasks",
@@ -373,4 +433,17 @@ esp_err_t sys_stats_register(void)
                         "failed to register the 'cpu' command");
 
     return ESP_OK;
+}
+
+unsigned sys_stats_get_cpu_load(void)
+{
+    return s_cpu_load;
+}
+
+unsigned sys_stats_get_core_load(int core)
+{
+    if (core < 0 || core >= configNUMBER_OF_CORES) {
+        return 0;
+    }
+    return s_core_load[core];
 }

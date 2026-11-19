@@ -20,6 +20,22 @@ extern "C" {
  */
 esp_err_t sys_stats_register(void);
 
+/**
+ * @brief  Get the CPU load of the system, in percent
+ *
+ * The load is measured in the background, every second, by the statistics
+ * task. The value is the load of one core, it can be higher than 100% when
+ * the two cores of the ESP32-S3 are busy.
+ */
+unsigned sys_stats_get_cpu_load(void);
+
+/**
+ * @brief  Get the CPU load of one core, in percent
+ *
+ * @param core number of the core
+ */
+unsigned sys_stats_get_core_load(int core);
+
 #ifdef __cplusplus
 }
 #endif
