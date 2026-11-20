@@ -11,15 +11,20 @@
  *   server_stop [uartN|all]    stop the TCP server of one or all the UARTs
  *   uart_baud <uartN> <baud>   set the baud rate of a UART
  *   uart_pins <uartN> <tx> <rx> set the GPIO pins of a UART
+ *   reboot                     restart the ESP32-S3
  *   help [command]            list the commands / show the help of one command
  */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
 #include "esp_console.h"
 #include "esp_err.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_wifi.h"
 #include "esp_check.h"
 
@@ -493,6 +498,35 @@ static int cmd_status(int argc, char **argv)
                stats.running ? "running" : "stopped",
                stats.client ? "connected" : "no client", rx_text, tx_text);
     }
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* reboot                                                              */
+/* ------------------------------------------------------------------ */
+
+/* Time given to the terminal to receive the last message before the
+   restart, in milliseconds */
+#define REBOOT_DELAY_MS 500
+
+static int cmd_reboot(int argc, char **argv)
+{
+    printf("\nRebooting the ESP32-S3...\n");
+
+    /* Close the TCP servers and leave the AP, so that the clients are not
+       left waiting for a connection that will never come. */
+    tcp_server_stop_all();
+    if (wifi_manager_is_connected()) {
+        wifi_manager_disconnect();
+    }
+
+    /* The message has to reach the terminal before the chip restarts */
+    fflush(stdout);
+    vTaskDelay(pdMS_TO_TICKS(REBOOT_DELAY_MS));
+
+    esp_restart();
+
+    /* esp_restart() does not return */
     return 0;
 }
 
@@ -1019,6 +1053,13 @@ static const help_cmd_t s_help_system[] = {
         .summary = "Show the CPU load (1 second measurement).",
         .note    = "  The console is blocked during the one second measurement.",
     },
+    {
+        .syntax  = "reboot",
+        .summary = "Restart the ESP32-S3.",
+        .note    = "  The TCP servers are stopped and the AP is left before\n"
+                   "  the restart, so that the clients are not left waiting\n"
+                   "  for a connection that will never come.",
+    },
 };
 
 #if CONFIG_EXAMPLE_LCD_ENABLE
@@ -1302,6 +1343,14 @@ static void register_console_commands(void)
         .argtable = &uart_pins_args,
     };
     ESP_ERROR_CHECK(esp_console_cmd_register(&uart_pins_cmd));
+
+    const esp_console_cmd_t reboot_cmd = {
+        .command = "reboot",
+        .help = "Restart the ESP32-S3",
+        .hint = NULL,
+        .func = &cmd_reboot,
+    };
+    ESP_ERROR_CHECK(esp_console_cmd_register(&reboot_cmd));
 
     ESP_ERROR_CHECK(sys_stats_register());
 

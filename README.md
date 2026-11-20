@@ -28,6 +28,7 @@ the servers can be selected at runtime.
 | `tasks` | List the FreeRTOS tasks (state, priority, core, free stack, run time) |
 | `mem` | Show the memory usage (internal RAM, DMA, PSRAM) |
 | `cpu` | Show the CPU load, measured over one second |
+| `reboot` | Restart the ESP32-S3 (the TCP servers are stopped and the AP is left first) |
 | `lcd_info` | Show the settings of the display |
 | `lcd_backlight [on\|off]` | Switch the backlight of the display on or off |
 | `lcd_rotate [degrees]` | Rotate the screen of the display |
