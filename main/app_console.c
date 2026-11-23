@@ -834,7 +834,7 @@ static int cmd_lcd_test(int argc, char **argv)
     }
 
     if (argc < 2) {
-        printf("Usage: lcd_test [raw|pattern|red|green|blue|white|black]\n");
+        printf("Usage: lcd_test [raw|map|pattern|red|green|blue|white|black]\n");
         return 1;
     }
 
@@ -848,6 +848,19 @@ static int cmd_lcd_test(int argc, char **argv)
             return 1;
         }
         printf("The memory of the controller is filled with green.\n");
+        return 0;
+    }
+
+    if (strcmp(argv[1], "map") == 0) {
+        /* The pattern shows how the screen is mapped: a red block in the top
+           left corner, a blue block in the bottom right corner, a green line
+           in the middle of the height and an orange line in the middle of
+           the width */
+        if (st7735_draw_map_pattern() != ESP_OK) {
+            printf("Failed to draw the mapping pattern.\n");
+            return 1;
+        }
+        printf("Mapping pattern drawn.\n");
         return 0;
     }
 
@@ -872,7 +885,7 @@ static int cmd_lcd_test(int argc, char **argv)
     } else if (strcmp(argv[1], "black") == 0) {
         color = 0x0000;
     } else {
-        printf("Usage: lcd_test [raw|pattern|red|green|blue|white|black]\n");
+        printf("Usage: lcd_test [raw|map|pattern|red|green|blue|white|black]\n");
         return 1;
     }
 
@@ -903,6 +916,46 @@ static int cmd_lcd_clock(int argc, char **argv)
     }
 
     printf("The SPI clock of the display is %d Hz.\n", st7735_get_clock());
+    return 0;
+}
+
+static int cmd_lcd_madctl(int argc, char **argv)
+{
+    if (!lcd_display_is_ready()) {
+        printf("The display is not initialized.\n");
+        return 1;
+    }
+
+    if (argc < 2) {
+        printf("The MADCTL register of the controller is 0x%02X.\n",
+               st7735_get_madctl());
+        return 0;
+    }
+
+    const int value = (int)strtol(argv[1], NULL, 0);
+    if (value < 0 || value > 0xFF) {
+        printf("Usage: lcd_madctl [0x00..0xFF]\n");
+        return 1;
+    }
+
+    if (st7735_set_madctl((uint8_t)value) != ESP_OK) {
+        printf("Failed to set the MADCTL register.\n");
+        return 1;
+    }
+    printf("The MADCTL register of the controller is 0x%02X.\n",
+           st7735_get_madctl());
+    return 0;
+}
+
+static int cmd_lcd_refresh(int argc, char **argv)
+{
+    if (!lcd_display_is_ready()) {
+        printf("The display is not initialized.\n");
+        return 1;
+    }
+
+    lcd_display_refresh();
+    printf("The screen is drawn again.\n");
     return 0;
 }
 
@@ -1100,6 +1153,22 @@ static const help_cmd_t s_help_display[] = {
                    "                 can be needed when the module is connected\n"
                    "                 with long wires",
         .example = "  lcd_clock 2000000",
+    },
+    {
+        .syntax  = "lcd_refresh",
+        .summary = "Draw the dashboard again over the whole screen.",
+        .note    = "  The test patterns are drawn directly on the panel, the\n"
+                   "  dashboard is only drawn again where it changed. This\n"
+                   "  command draws it over the whole screen.",
+    },
+    {
+        .syntax  = "lcd_madctl [value]",
+        .summary = "Show or set the MADCTL register of the controller.",
+        .args    = "  <value>          The value of the register, in decimal or\n"
+                   "                 in hexadecimal (0xC8)",
+        .note    = "  The register drives the orientation and the mirroring\n"
+                   "  of the screen, it depends on the module.",
+        .example = "  lcd_madctl 0x08",
     },
     {
         .syntax  = "lcd_offset [col row]",
@@ -1394,6 +1463,22 @@ static void register_console_commands(void)
         .func = &cmd_lcd_clock,
     };
     ESP_ERROR_CHECK(esp_console_cmd_register(&lcd_clock_cmd));
+
+    const esp_console_cmd_t lcd_refresh_cmd = {
+        .command = "lcd_refresh",
+        .help = "Draw the dashboard again over the whole screen",
+        .hint = NULL,
+        .func = &cmd_lcd_refresh,
+    };
+    ESP_ERROR_CHECK(esp_console_cmd_register(&lcd_refresh_cmd));
+
+    const esp_console_cmd_t lcd_madctl_cmd = {
+        .command = "lcd_madctl",
+        .help = "Show or set the MADCTL register of the display controller",
+        .hint = "[value]",
+        .func = &cmd_lcd_madctl,
+    };
+    ESP_ERROR_CHECK(esp_console_cmd_register(&lcd_madctl_cmd));
 
     const esp_console_cmd_t lcd_offset_cmd = {
         .command = "lcd_offset",

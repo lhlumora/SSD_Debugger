@@ -23,18 +23,18 @@
 extern "C" {
 #endif
 
-/* Width of the visible area of the panel, in pixels */
-#define ST7735_WIDTH 80
-/* Height of the visible area of the panel, in pixels */
-#define ST7735_HEIGHT 160
-
 /* Orientation of the screen */
 typedef enum {
-    ST7735_ROTATION_0 = 0,   /* portrait, 80x160 */
-    ST7735_ROTATION_90,      /* landscape, 160x80 */
+    ST7735_ROTATION_0 = 0,   /* portrait */
+    ST7735_ROTATION_90,      /* landscape */
     ST7735_ROTATION_180,     /* portrait, upside down */
-    ST7735_ROTATION_270,     /* landscape, 160x80 */
+    ST7735_ROTATION_270,     /* landscape */
 } st7735_rotation_t;
+
+/* Size of the memory of the controller, the visible area of the module is
+   a part of it */
+#define ST7735_MEMORY_WIDTH  132
+#define ST7735_MEMORY_HEIGHT 162
 
 /* Settings of the panel */
 typedef struct {
@@ -46,8 +46,12 @@ typedef struct {
     int   rst_gpio;              /* reset */
     int   bl_gpio;               /* backlight, -1 when it is not connected */
     bool  bl_active_low;         /* the backlight is lit when the pin is low */
-    int   clock_speed_hz;        /* SPI clock, 0 for the default (20 MHz) */
+    int   clock_speed_hz;        /* SPI clock, 0 for the default (2 MHz) */
     st7735_rotation_t rotation;  /* orientation of the screen */
+    int   width;                 /* width of the visible area */
+    int   height;                /* height of the visible area */
+    int   col_start;             /* offset of the visible area (portrait) */
+    int   row_start;             /* offset of the visible area (portrait) */
 } st7735_config_t;
 
 /**
@@ -107,6 +111,23 @@ void st7735_set_backlight(bool on);
 bool st7735_backlight_is_on(void);
 
 /**
+ * @brief  Set the value of the MADCTL register of the controller
+ *
+ * The register drives the orientation and the mirroring of the screen, it
+ * depends on the module.
+ *
+ * @param value the value of the register
+ *
+ * @return ESP_OK on success
+ */
+esp_err_t st7735_set_madctl(uint8_t value);
+
+/**
+ * @brief  Get the value of the MADCTL register of the controller
+ */
+uint8_t st7735_get_madctl(void);
+
+/**
  * @brief  Change the offset of the visible area in the memory of the controller
  *
  * The controller has 132x162 pixels of memory, the visible area of the module
@@ -163,6 +184,18 @@ int st7735_get_clock(void);
  * @return ESP_OK on success
  */
 esp_err_t st7735_fill_raw(uint16_t color);
+
+/**
+ * @brief  Draw a pattern that shows how the screen is mapped
+ *
+ * A red block in the top left corner, a blue block in the bottom right
+ * corner, a green line in the middle of the height and an orange line in
+ * the middle of the width. A photo of the screen shows if the image is
+ * mirrored, turned or shifted.
+ *
+ * @return ESP_OK on success
+ */
+esp_err_t st7735_draw_map_pattern(void);
 
 /**
  * @brief  Draw a test pattern on the screen

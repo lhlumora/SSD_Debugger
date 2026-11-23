@@ -225,7 +225,58 @@ menu "Example Configuration"
             default 0
             help
                 The orientation of the screen: 0 and 180 for the portrait
-                mode (80x160), 90 and 270 for the landscape mode (160x80).
+                mode, 90 and 270 for the landscape mode.
+
+        config EXAMPLE_LCD_WIDTH
+            int "Width of the visible area"
+            range 80 132
+            default 128
+            help
+                Number of pixels of the visible area of the module. It is 80
+                for the 0.96 inch modules and 128 for the 1.8 inch ones.
+
+        config EXAMPLE_LCD_HEIGHT
+            int "Height of the visible area"
+            range 80 162
+            default 160
+            help
+                Number of pixels of the visible area of the module. It is 160
+                for the 0.96 inch and for the 1.8 inch modules.
+
+        config EXAMPLE_LCD_INVERT_COLORS
+            bool "Invert the colors of the display"
+            default n
+            help
+                The colors of the screen are inverted by the controller. Most
+                of the modules need the inversion to be enabled, disable it
+                when the colors of your module are inverted.
+
+        config EXAMPLE_LCD_BGR_ORDER
+            bool "The colors are in the BGR order"
+            default n
+            help
+                The order of the colors of the pixels sent to the controller.
+                Enable it when the red and the blue are swapped on the screen
+                (the module works in the BGR order).
+
+        config EXAMPLE_LCD_COL_START
+            int "Offset of the first column"
+            range 0 52
+            default 0
+            help
+                The controller has 132x162 pixels of memory, the visible area
+                of the module is smaller and offset in it.
+
+                The offset is 26/1 for the 0.96 inch green modules, 24/0 for
+                the 0.96 inch red modules and 0/0 for the 1.8 inch modules.
+
+        config EXAMPLE_LCD_ROW_START
+            int "Offset of the first row"
+            range 0 52
+            default 0
+            help
+                Offset of the first row of the visible area in the memory of
+                the controller, see the offset of the first column.
 
     endmenu
 endmenu

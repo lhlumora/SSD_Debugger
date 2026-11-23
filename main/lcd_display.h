@@ -80,6 +80,14 @@ esp_err_t lcd_display_set_rotation(int rotation);
 int lcd_display_get_rotation(void);
 
 /**
+ * @brief  Draw the whole screen again
+ *
+ * It is useful after a test pattern was drawn directly on the panel: the
+ * dashboard is drawn again over it.
+ */
+void lcd_display_refresh(void);
+
+/**
  * @brief  Switch the backlight on or off
  */
 void lcd_display_set_backlight(bool on);

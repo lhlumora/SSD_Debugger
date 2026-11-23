@@ -133,29 +133,34 @@ pattern shows the state of the system:
 
 The state currently shown is printed by the `status` command.
 
-## Display (ST7735S + LVGL)
+## Display (ST7735 + LVGL)
 
-A ST7735S display (0.96 inch, 80x160 pixels) can be attached to the SPI bus
+A ST7735 display (1.8 inch, 128x160 pixels) can be attached to the SPI bus
 of the board. It is driven by [LVGL](https://lvgl.io/) and shows a dashboard of
 the system: the state of the Wi-Fi connection, the IP address, the TCP servers,
-the CPU load, the free memory and the running time. The dot in the title bar
-shows the state of the status LED.
+the CPU load, the free memory, the running time and the state of the status
+LED. The dot in the title bar shows the state of the status LED.
 
 The wiring of the display (7 pins, the module has also a VCC and a GND pin):
 
 | Signal | Description | Default GPIO |
 | ------ | ----------- | ------------ |
-| SCL    | SPI clock | 12 |
-| SDA    | SPI data (MOSI) | 11 |
-| CS     | Chip select | 10 |
-| DC     | Data / command | 9 |
-| RES    | Reset | 8 |
-| BL     | Backlight | 7 |
+| SCL    | SPI clock | 43 |
+| SDA    | SPI data (MOSI) | 44 |
+| CS     | Chip select | 8 |
+| DC     | Data / command | 7 |
+| RES    | Reset | 6 |
+| BL     | Backlight | 9 |
 
 All the pins are configurable in menuconfig -> Example Configuration Options ->
-Display (ST7735S). The backlight can be switched off when it is not connected
+Display (ST7735). The backlight can be switched off when it is not connected
 to a GPIO (set its number to -1), the polarity of the backlight can be
 inverted as well.
+
+The settings of the panel (size, orientation, offset of the visible area in
+the memory of the controller, color order) are in the same menu. The defaults
+are the ones of a 1.8 inch 128x160 module. The 0.96 inch 80x160 modules need
+a width of 80 and an offset of 26/1 (green) or 24/0 (red).
 
 The dashboard is refreshed every second. The display can be controlled from the
 console:
@@ -165,6 +170,11 @@ console:
 | `lcd_info` | Show the settings of the display |
 | `lcd_backlight [on\|off]` | Switch the backlight on or off |
 | `lcd_rotate [degrees]` | Rotate the screen (0, 90, 180 or 270) |
+| `lcd_refresh` | Draw the dashboard again over the whole screen |
+| `lcd_test [raw\|map\|pattern\|color]` | Draw a test pattern on the screen |
+| `lcd_offset [col row]` | Show or set the offset of the visible area |
+| `lcd_madctl [value]` | Show or set the MADCTL register of the controller |
+| `lcd_clock [hz]` | Show or set the speed of the SPI bus |
 
 Notes:
 

@@ -21,7 +21,11 @@
 static const char *TAG = "lcd_display";
 
 /* Number of lines of the draw buffer of the display */
-#define LCD_BUFFER_LINES 20
+#define LCD_BUFFER_LINES 12
+
+/* The SPI controller cannot transfer more than 4092 bytes at once, the draw
+   buffer has to fit in one transfer */
+#define LCD_MAX_TRANSFER 4092
 
 /* Size of the stack of the LVGL task */
 #define LCD_TASK_STACK_SIZE 6144
@@ -109,6 +113,10 @@ esp_err_t lcd_display_init(void)
 #endif
         .clock_speed_hz = CONFIG_EXAMPLE_LCD_SPI_CLOCK_HZ,
         .rotation = CONFIG_EXAMPLE_LCD_ROTATION,
+        .width = CONFIG_EXAMPLE_LCD_WIDTH,
+        .height = CONFIG_EXAMPLE_LCD_HEIGHT,
+        .col_start = CONFIG_EXAMPLE_LCD_COL_START,
+        .row_start = CONFIG_EXAMPLE_LCD_ROW_START,
     };
 
     ESP_RETURN_ON_ERROR(st7735_init(&panel_config), TAG, "st7735_init() failed");
@@ -116,16 +124,24 @@ esp_err_t lcd_display_init(void)
     lv_init();
     lv_tick_set_cb(tick_get_cb);
 
-    int width = ST7735_WIDTH;
-    int height = ST7735_HEIGHT;
+    int width = 0;
+    int height = 0;
     st7735_get_size(&width, &height);
 
     s_display = lv_display_create(width, height);
     ESP_RETURN_ON_FALSE(s_display != NULL, ESP_ERR_NO_MEM, TAG, "lv_display_create() failed");
 
     /* The draw buffer is sent to the panel by the SPI driver, it has to be
-       in a memory that the DMA controller can access */
-    const size_t buffer_size = (size_t)width * LCD_BUFFER_LINES * sizeof(uint16_t);
+       in a memory that the DMA controller can access. It also has to fit in
+       one SPI transfer. */
+    int lines = LCD_MAX_TRANSFER / (width * sizeof(uint16_t));
+    if (lines > LCD_BUFFER_LINES) {
+        lines = LCD_BUFFER_LINES;
+    }
+    if (lines < 1) {
+        lines = 1;
+    }
+    const size_t buffer_size = (size_t)width * lines * sizeof(uint16_t);
     s_buffer = heap_caps_malloc(buffer_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
     ESP_RETURN_ON_FALSE(s_buffer != NULL, ESP_ERR_NO_MEM, TAG,
                         "the draw buffer could not be allocated");
@@ -208,11 +224,18 @@ esp_err_t lcd_display_set_rotation(int rotation)
 
     /* The size of the screen changed, the draw buffer and the dashboard have
        to be rebuilt */
-    int width = ST7735_WIDTH;
-    int height = ST7735_HEIGHT;
+    int width = 0;
+    int height = 0;
     st7735_get_size(&width, &height);
 
-    const size_t buffer_size = (size_t)width * LCD_BUFFER_LINES * sizeof(uint16_t);
+    int lines = LCD_MAX_TRANSFER / (width * sizeof(uint16_t));
+    if (lines > LCD_BUFFER_LINES) {
+        lines = LCD_BUFFER_LINES;
+    }
+    if (lines < 1) {
+        lines = 1;
+    }
+    const size_t buffer_size = (size_t)width * lines * sizeof(uint16_t);
     void *buffer = heap_caps_malloc(buffer_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
     if (buffer == NULL) {
         lv_unlock();
@@ -236,6 +259,20 @@ esp_err_t lcd_display_set_rotation(int rotation)
 int lcd_display_get_rotation(void)
 {
     return (int)st7735_get_rotation();
+}
+
+void lcd_display_refresh(void)
+{
+    if (s_display == NULL) {
+        return;
+    }
+
+    /* The whole screen is invalidated, it is drawn again by the task of
+       LVGL. It is useful after a test pattern was drawn directly on the
+       panel. */
+    lv_lock();
+    lv_obj_invalidate(lv_screen_active());
+    lv_unlock();
 }
 
 void lcd_display_set_backlight(bool on)

@@ -39,7 +39,7 @@ static const char *TAG = "lcd_ui";
 #define ROW_HEIGHT 14
 
 /* Number of rows of the dashboard */
-#define ROW_COUNT 6
+#define ROW_COUNT 7
 
 /* The rows of the dashboard */
 typedef enum {
@@ -49,6 +49,7 @@ typedef enum {
     ROW_CPU,
     ROW_MEMORY,
     ROW_UPTIME,
+    ROW_LED,
 } row_id_t;
 
 typedef struct {
@@ -140,6 +141,10 @@ static void update_dashboard(lv_timer_t *timer)
     format_uptime(text, sizeof(text));
     lv_label_set_text_fmt(s_rows[ROW_UPTIME].value, "%s", text);
 
+    /* The state of the status LED */
+    lv_label_set_text_fmt(s_rows[ROW_LED].value, "%s",
+                          led_status_state_name(led_status_get()));
+
     /* The dot shows the state of the status LED */
     led_state_t led_state = led_status_get();
     lv_color_t color;
@@ -158,23 +163,27 @@ static void update_dashboard(lv_timer_t *timer)
     lv_obj_set_style_bg_color(s_dot, color, LV_PART_MAIN);
 }
 
-/* The label and the value of a row */
+/* The label and the value of a row. The screen is 128 pixels wide, the
+   label takes the first third of it. */
 static void create_row(lv_obj_t *parent, row_id_t id, const char *label, int y)
 {
+    const int screen_width = lv_display_get_horizontal_resolution(lv_display_get_default());
+    const int label_width = screen_width / 4;
+
     s_rows[id].label = lv_label_create(parent);
     lv_label_set_text(s_rows[id].label, label);
     lv_obj_set_style_text_color(s_rows[id].label, COLOR_LABEL, LV_PART_MAIN);
     lv_obj_set_style_text_font(s_rows[id].label, &lv_font_montserrat_12, LV_PART_MAIN);
     lv_obj_set_pos(s_rows[id].label, 4, y);
-    lv_obj_set_width(s_rows[id].label, 34);
+    lv_obj_set_width(s_rows[id].label, label_width);
     lv_label_set_long_mode(s_rows[id].label, LV_LABEL_LONG_CLIP);
 
     s_rows[id].value = lv_label_create(parent);
     lv_label_set_text(s_rows[id].value, "-");
     lv_obj_set_style_text_color(s_rows[id].value, COLOR_VALUE, LV_PART_MAIN);
     lv_obj_set_style_text_font(s_rows[id].value, &lv_font_montserrat_12, LV_PART_MAIN);
-    lv_obj_set_pos(s_rows[id].value, 40, y);
-    lv_obj_set_width(s_rows[id].value, 38);
+    lv_obj_set_pos(s_rows[id].value, label_width + 6, y);
+    lv_obj_set_width(s_rows[id].value, screen_width - label_width - 10);
     lv_label_set_long_mode(s_rows[id].value, LV_LABEL_LONG_DOT);
 }
 
@@ -202,8 +211,12 @@ esp_err_t lcd_ui_create(void)
     s_title = lv_label_create(s_header);
     lv_label_set_text(s_title, "SSD Debugger");
     lv_obj_set_style_text_color(s_title, COLOR_TITLE, LV_PART_MAIN);
-    lv_obj_set_style_text_font(s_title, &lv_font_montserrat_12, LV_PART_MAIN);
-    lv_obj_set_pos(s_title, 4, 2);
+    lv_obj_set_style_text_font(s_title, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_pos(s_title, 4, 1);
+
+    /* The state of the status LED */
+    lv_label_set_text_fmt(s_rows[ROW_LED].value, "%s",
+                          led_status_state_name(led_status_get()));
 
     /* The dot shows the state of the status LED */
     const int screen_width = lv_display_get_horizontal_resolution(lv_display_get_default());
@@ -227,6 +240,8 @@ esp_err_t lcd_ui_create(void)
     create_row(screen, ROW_MEMORY, "MEM", y);
     y += ROW_HEIGHT;
     create_row(screen, ROW_UPTIME, "UP", y);
+    y += ROW_HEIGHT;
+    create_row(screen, ROW_LED, "LED", y);
 
     /* The timer that refreshes the content of the dashboard */
     s_timer = lv_timer_create(update_dashboard, 1000, NULL);
