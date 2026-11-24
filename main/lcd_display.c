@@ -38,6 +38,10 @@ static void            *s_buffer;
 static TaskHandle_t     s_task;
 static bool             s_ready;
 
+/* The number of the frames drawn on the screen since the last call to
+   lcd_display_take_frame_count() */
+static uint32_t         s_frame_count;
+
 /* The tick of LVGL is driven by the esp_timer */
 static uint32_t tick_get_cb(void)
 {
@@ -72,6 +76,8 @@ static void flush_callback(lv_display_t *display, const lv_area_t *area, uint8_t
 
     swap_bytes(pixels, (size_t)width * height * 2);
     st7735_draw_pixels(area->x1, area->y1, width, height, pixels);
+
+    s_frame_count++;
 
     lv_display_flush_ready(display);
 }
@@ -184,6 +190,13 @@ void lcd_display_deinit(void)
 bool lcd_display_is_ready(void)
 {
     return s_ready;
+}
+
+uint32_t lcd_display_take_frame_count(void)
+{
+    const uint32_t count = s_frame_count;
+    s_frame_count = 0;
+    return count;
 }
 
 lv_display_t *lcd_display_get(void)

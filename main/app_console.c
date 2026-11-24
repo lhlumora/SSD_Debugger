@@ -815,6 +815,10 @@ static int cmd_lcd_info(int argc, char **argv)
     int height = 0;
     lcd_display_get_size(&width, &height);
 
+    int col_start = 0;
+    int row_start = 0;
+    st7735_get_offset(&col_start, &row_start);
+
     printf("Display: ST7735S %dx%d, rotation %d, backlight %s\n",
            width, height, lcd_display_get_rotation(),
            lcd_display_backlight_is_on() ? "on" : "off");
@@ -823,6 +827,9 @@ static int cmd_lcd_info(int argc, char **argv)
            CONFIG_EXAMPLE_LCD_CS_GPIO, CONFIG_EXAMPLE_LCD_DC_GPIO,
            CONFIG_EXAMPLE_LCD_RST_GPIO, CONFIG_EXAMPLE_LCD_BL_GPIO,
            st7735_get_clock());
+    printf("Colors: %s order, MADCTL 0x%02X, visible area at %d/%d\n",
+           (st7735_get_madctl() & 0x08) ? "BGR" : "RGB",
+           st7735_get_madctl(), col_start, row_start);
     return 0;
 }
 

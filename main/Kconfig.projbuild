@@ -145,8 +145,10 @@ menu "Example Configuration"
             default y
             help
                 Drive the ST7735S display of the board with LVGL. The display
-                shows the dashboard of the system (Wi-Fi, TCP servers, CPU
-                load, free memory, running time).
+                shows a test screen that checks the driving of the panel: the
+                order of the colors, the shades of gray, the animations and
+                the position of the visible area in the memory of the
+                controller.
 
         config EXAMPLE_LCD_SPI_HOST
             int "SPI peripheral"
@@ -212,12 +214,14 @@ menu "Example Configuration"
         config EXAMPLE_LCD_SPI_CLOCK_HZ
             int "SPI clock (Hz)"
             range 100000 80000000
-            default 2000000
+            default 10000000
             help
                 The speed of the SPI bus of the display. The controller
-                supports up to 62.5 MHz, but a low speed (2 MHz) is safer
-                when the module is connected with long wires. The speed can
-                be changed at runtime with the 'lcd_clock' command.
+                supports up to 62.5 MHz, but a low speed is safer when the
+                module is connected with long wires. The ST7735 modules are
+                usually driven at 10 MHz, the TFT_eSPI library uses the same
+                speed. The speed can be changed at runtime with the
+                'lcd_clock' command.
 
         config EXAMPLE_LCD_ROTATION
             int "Rotation of the screen"
@@ -267,8 +271,16 @@ menu "Example Configuration"
                 The controller has 132x162 pixels of memory, the visible area
                 of the module is smaller and offset in it.
 
-                The offset is 26/1 for the 0.96 inch green modules, 24/0 for
-                the 0.96 inch red modules and 0/0 for the 1.8 inch modules.
+                The offset depends on the module:
+                  0/0   128x160 modules of the RobotLCD type (the default),
+                        the ones driven by the TFT_eSPI library with the
+                        ST7735_ROBOTLCD setting
+                  2/1   128x160 modules with a green tab
+                  26/1  80x160 modules with a green tab
+                  24/0  80x160 modules with a red tab
+
+                The offset does not depend on the orientation of the screen.
+                It can be changed at runtime with the 'lcd_offset' command.
 
         config EXAMPLE_LCD_ROW_START
             int "Offset of the first row"

@@ -3,12 +3,12 @@
  *
  * See st7735.h for the description of the module.
  */
-#include <stdlib.h>
 #include <string.h>
 
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
 #include "esp_check.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -19,46 +19,31 @@
 
 static const char *TAG = "st7735";
 
-/* Commands of the controller */
+/* Commands of the controller (ST7735R) */
 #define ST7735_CMD_SWRESET  0x01
 #define ST7735_CMD_SLPOUT   0x11
-#define ST7735_CMD_INVON    0x21
+#define ST7735_CMD_NORON    0x13
 #define ST7735_CMD_INVOFF   0x20
+#define ST7735_CMD_INVON    0x21
 #define ST7735_CMD_DISPOFF  0x28
 #define ST7735_CMD_DISPON   0x29
 #define ST7735_CMD_CASET    0x2A
 #define ST7735_CMD_RASET    0x2B
 #define ST7735_CMD_RAMWR    0x2C
 #define ST7735_CMD_MADCTL   0x36
-#define ST7735_CMD_IDMOFF   0x38
-#define ST7735_CMD_IDMON    0x39
 #define ST7735_CMD_COLMOD   0x3A
-#define ST7735_CMD_MCTR1    0xB0
-#define ST7735_CMD_MCTR2    0xB1
-#define ST7735_CMD_MCTR3    0xB2
-#define ST7735_CMD_MCTR4    0xB3
-#define ST7735_CMD_MCTR5    0xB4
-#define ST7735_CMD_PCTR1    0xC0
-#define ST7735_CMD_PCTR2    0xC1
-#define ST7735_CMD_PCTR3    0xC2
-#define ST7735_CMD_PCTR4    0xC3
-#define ST7735_CMD_PCTR5    0xC4
+#define ST7735_CMD_FRMCTR1  0xB1
+#define ST7735_CMD_FRMCTR2  0xB2
+#define ST7735_CMD_FRMCTR3  0xB3
+#define ST7735_CMD_INVCTR   0xB4
+#define ST7735_CMD_PWCTR1   0xC0
+#define ST7735_CMD_PWCTR2   0xC1
+#define ST7735_CMD_PWCTR3   0xC2
+#define ST7735_CMD_PWCTR4   0xC3
+#define ST7735_CMD_PWCTR5   0xC4
 #define ST7735_CMD_VMCTR1   0xC5
-#define ST7735_CMD_VMCTR2   0xC6
-#define ST7735_CMD_VMCTR3   0xC7
-#define ST7735_CMD_PCTR6    0xC8
-#define ST7735_CMD_PCLCTRL  0xC9
-#define ST7735_CMD_GCTRL    0xD5
-#define ST7735_CMD_VCOMS    0xDB
-#define ST7735_CMD_LCCTRL   0xE0
-#define ST7735_CMD_LCMCTR   0xE1
-#define ST7735_CMD_VCVS     0xE2
-#define ST7735_CMD_VRHS     0xE3
-#define ST7735_CMD_TMRD     0xE9
-#define ST7735_CMD_PWSET    0xF0
-#define ST7735_CMD_PWSET2   0xF1
-#define ST7735_CMD_PWSET3   0xF2
-#define ST7735_CMD_EVSET    0xF3
+#define ST7735_CMD_GMCTRP1  0xE0
+#define ST7735_CMD_GMCTRN1  0xE1
 
 /* Bits of the MADCTL command */
 #define ST7735_MADCTL_MY  0x80
@@ -98,8 +83,6 @@ static int   s_col_start;
 static int   s_row_start;
 static int   s_width = 128;
 static int   s_height = 160;
-static int   s_col_start_portrait;
-static int   s_row_start_portrait;
 
 /* The panel is used by the task of LVGL and by the tasks of the console,
    the accesses are serialized with this mutex. */
@@ -121,17 +104,50 @@ static void panel_unlock(void)
     }
 }
 
-/* The offset of the visible area in the memory of the controller. In the
-   landscape mode the offsets are swapped. */
-static void set_offsets(st7735_rotation_t rotation, int col_start, int row_start)
+/* Whether the screen is in the landscape mode, the axes of the screen are
+   then swapped in the memory of the controller. */
+static bool is_landscape(st7735_rotation_t rotation)
 {
-    if (rotation == ST7735_ROTATION_90 || rotation == ST7735_ROTATION_270) {
-        s_col_start = row_start;
-        s_row_start = col_start;
-    } else {
-        s_col_start = col_start;
-        s_row_start = row_start;
+    return rotation == ST7735_ROTATION_90 || rotation == ST7735_ROTATION_270;
+}
+
+/* A part of a sequence of transfers sent to the controller */
+typedef struct {
+    const void *data;   /* the bytes to send */
+    size_t      length; /* their number */
+    bool        is_data; /* the D/C pin is high when it is true */
+} transfer_t;
+
+/* Send a sequence of transfers to the controller.
+ *
+ * The chip select line stays low during the whole sequence: the controller
+ * resets the parser of the commands when the line goes high. The parts are
+ * sent in separate transfers because the level of the D/C pin has to change
+ * between them. The bus is locked so that the chip select line is not
+ * released between the transfers. */
+static esp_err_t write_sequence(const transfer_t *transfers, size_t count)
+{
+    /* The bus is locked, the chip select line can be kept low */
+    ESP_RETURN_ON_ERROR(spi_device_acquire_bus(s_spi, portMAX_DELAY), TAG,
+                        "the SPI bus could not be locked");
+
+    esp_err_t err = ESP_OK;
+
+    for (size_t i = 0; i < count && err == ESP_OK; i++) {
+        spi_transaction_t transaction = {
+            .length = transfers[i].length * 8,
+            .tx_buffer = transfers[i].data,
+            /* The chip select line is released at the end of the last
+               transfer only */
+            .flags = (i + 1 < count) ? SPI_TRANS_CS_KEEP_ACTIVE : 0,
+        };
+
+        gpio_set_level(s_dc_gpio, transfers[i].is_data ? 1 : 0);
+        err = spi_device_polling_transmit(s_spi, &transaction);
     }
+
+    spi_device_release_bus(s_spi);
+    return err;
 }
 
 /* Send a command to the controller */
@@ -146,27 +162,18 @@ static esp_err_t write_command(uint8_t command)
     return spi_device_polling_transmit(s_spi, &transaction);
 }
 
-/* Send data to the controller */
-static esp_err_t write_data(const void *data, size_t length)
-{
-    if (length == 0) {
-        return ESP_OK;
-    }
-
-    gpio_set_level(s_dc_gpio, 1);
-
-    spi_transaction_t transaction = {
-        .length = length * 8,
-        .tx_buffer = data,
-    };
-    return spi_device_polling_transmit(s_spi, &transaction);
-}
-
 /* Send a command followed by its parameters */
 static esp_err_t write_command_with_data(uint8_t command, const uint8_t *data, size_t length)
 {
-    ESP_RETURN_ON_ERROR(write_command(command), TAG, "write_command() failed");
-    return write_data(data, length);
+    if (length == 0) {
+        return write_command(command);
+    }
+
+    const transfer_t transfers[] = {
+        { &command, 1,     false },
+        { data,    length, true  },
+    };
+    return write_sequence(transfers, sizeof(transfers) / sizeof(transfers[0]));
 }
 
 /* Reset the controller */
@@ -183,55 +190,79 @@ static void reset_panel(void)
     vTaskDelay(pdMS_TO_TICKS(100));
 }
 
-/* The initialization sequence of the controller */
+/* The initialization sequence of the controller.
+ *
+ * It is the sequence of the ST7735R, the controller of the 1.8 inch modules
+ * (128x160 pixels). It is the same sequence as the one of the TFT_eSPI
+ * library, which drives the same modules with the same settings. */
 static esp_err_t init_sequence(void)
 {
     /* Software reset */
     ESP_RETURN_ON_ERROR(write_command(ST7735_CMD_SWRESET), TAG, "SWRESET failed");
     vTaskDelay(pdMS_TO_TICKS(150));
 
-    /* Sleep out and wait for the controller to be ready */
+    /* Sleep out, the controller needs 500 ms to be ready */
     ESP_RETURN_ON_ERROR(write_command(ST7735_CMD_SLPOUT), TAG, "SLPOUT failed");
-    vTaskDelay(pdMS_TO_TICKS(120));
+    vTaskDelay(pdMS_TO_TICKS(500));
 
-    /* Frame rate */
-    ESP_RETURN_ON_ERROR(write_command_with_data(ST7735_CMD_MCTR1, (uint8_t[]){0x01, 0x2C, 0x2C}, 3), TAG, "MCTR1 failed");
-    ESP_RETURN_ON_ERROR(write_command_with_data(ST7735_CMD_MCTR2, (uint8_t[]){0x01, 0x2C, 0x2C}, 3), TAG, "MCTR2 failed");
-    ESP_RETURN_ON_ERROR(write_command_with_data(ST7735_CMD_MCTR3, (uint8_t[]){0x01, 0x2C, 0x2C}, 3), TAG, "MCTR3 failed");
+    /* Frame rate control. The values are the ones of the 128x160 modules. */
+    ESP_RETURN_ON_ERROR(write_command_with_data(ST7735_CMD_FRMCTR1,
+                        (const uint8_t[]){0x0B, 0x14}, 2), TAG, "FRMCTR1 failed");
+    ESP_RETURN_ON_ERROR(write_command_with_data(ST7735_CMD_FRMCTR2,
+                        (const uint8_t[]){0x0B, 0x14}, 2), TAG, "FRMCTR2 failed");
+    ESP_RETURN_ON_ERROR(write_command_with_data(ST7735_CMD_FRMCTR3,
+                        (const uint8_t[]){0x0B, 0x14, 0x0B, 0x14}, 4), TAG, "FRMCTR3 failed");
 
-    /* Power control, the values are the ones of the 1.8 inch modules */
-    ESP_RETURN_ON_ERROR(write_command_with_data(ST7735_CMD_PCTR1, (uint8_t[]){0xA2, 0x02, 0x84}, 3), TAG, "PCTR1 failed");
-    ESP_RETURN_ON_ERROR(write_command_with_data(ST7735_CMD_PCTR2, (uint8_t[]){0xC5}, 1), TAG, "PCTR2 failed");
-    ESP_RETURN_ON_ERROR(write_command_with_data(ST7735_CMD_PCTR3, (uint8_t[]){0x0A, 0x00}, 2), TAG, "PCTR3 failed");
-    ESP_RETURN_ON_ERROR(write_command_with_data(ST7735_CMD_PCTR4, (uint8_t[]){0x8A, 0x2A}, 2), TAG, "PCTR4 failed");
-    ESP_RETURN_ON_ERROR(write_command_with_data(ST7735_CMD_PCTR5, (uint8_t[]){0x8A, 0xEE, 0x8E}, 3), TAG, "PCTR5 failed");
+    /* Display inversion control: the colors are not inverted */
+    ESP_RETURN_ON_ERROR(write_command_with_data(ST7735_CMD_INVCTR,
+                        (const uint8_t[]){0x07}, 1), TAG, "INVCTR failed");
 
-    /* VCOM */
-    ESP_RETURN_ON_ERROR(write_command_with_data(ST7735_CMD_VMCTR1, (uint8_t[]){0x0E}, 1), TAG, "VMCTR1 failed");
-    ESP_RETURN_ON_ERROR(write_command_with_data(ST7735_CMD_VMCTR2, (uint8_t[]){0x01}, 1), TAG, "VMCTR2 failed");
-    ESP_RETURN_ON_ERROR(write_command_with_data(ST7735_CMD_VMCTR3, (uint8_t[]){0x03}, 1), TAG, "VMCTR3 failed");
+    /* Power control */
+    ESP_RETURN_ON_ERROR(write_command_with_data(ST7735_CMD_PWCTR1,
+                        (const uint8_t[]){0xA2, 0x02, 0x84}, 3), TAG, "PWCTR1 failed");
+    ESP_RETURN_ON_ERROR(write_command_with_data(ST7735_CMD_PWCTR2,
+                        (const uint8_t[]){0xC5}, 1), TAG, "PWCTR2 failed");
+    ESP_RETURN_ON_ERROR(write_command_with_data(ST7735_CMD_PWCTR3,
+                        (const uint8_t[]){0x0A, 0x00}, 2), TAG, "PWCTR3 failed");
+    ESP_RETURN_ON_ERROR(write_command_with_data(ST7735_CMD_PWCTR4,
+                        (const uint8_t[]){0x8A, 0x2A}, 2), TAG, "PWCTR4 failed");
+    ESP_RETURN_ON_ERROR(write_command_with_data(ST7735_CMD_PWCTR5,
+                        (const uint8_t[]){0x8A, 0xEE}, 2), TAG, "PWCTR5 failed");
 
-    /* Gate control and inversion of the colors */
-    ESP_RETURN_ON_ERROR(write_command_with_data(ST7735_CMD_GCTRL, (uint8_t[]){0x03}, 1), TAG, "GCTRL failed");
-    ESP_RETURN_ON_ERROR(write_command_with_data(ST7735_CMD_VCOMS, (uint8_t[]){0x03}, 1), TAG, "VCOMS failed");
-    ESP_RETURN_ON_ERROR(write_command_with_data(ST7735_CMD_LCCTRL, (uint8_t[]){0x00}, 1), TAG, "LCCTRL failed");
-    ESP_RETURN_ON_ERROR(write_command_with_data(ST7735_CMD_VCVS, (uint8_t[]){0x03}, 1), TAG, "VCVS failed");
+    /* VCOM control */
+    ESP_RETURN_ON_ERROR(write_command_with_data(ST7735_CMD_VMCTR1,
+                        (const uint8_t[]){0x0E}, 1), TAG, "VMCTR1 failed");
 
-    /* Gamma */
-    ESP_RETURN_ON_ERROR(write_command_with_data(ST7735_CMD_EVSET, (uint8_t[]){
-                                  0x0A, 0x0B, 0x06, 0x08, 0x09, 0x0A, 0x0F, 0x08,
-                                  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, 16), TAG, "EVSET failed");
-
-    /* The pixel format is 16 bits per pixel */
-    ESP_RETURN_ON_ERROR(write_command_with_data(ST7735_CMD_COLMOD, (uint8_t[]){0x05}, 1), TAG, "COLMOD failed");
-
-    /* The colors are inverted and the screen is switched on */
+    /* The colors are inverted or not, depending on the module */
 #if ST7735_INVERT_COLORS
     ESP_RETURN_ON_ERROR(write_command(ST7735_CMD_INVON), TAG, "INVON failed");
 #else
     ESP_RETURN_ON_ERROR(write_command(ST7735_CMD_INVOFF), TAG, "INVOFF failed");
 #endif
+
+    /* The pixel format is 16 bits per pixel */
+    ESP_RETURN_ON_ERROR(write_command_with_data(ST7735_CMD_COLMOD,
+                        (const uint8_t[]){0x05}, 1), TAG, "COLMOD failed");
+
+    /* The gamma curves */
+    ESP_RETURN_ON_ERROR(write_command_with_data(ST7735_CMD_GMCTRP1,
+                        (const uint8_t[]){
+                            0x02, 0x1C, 0x07, 0x12, 0x37, 0x32, 0x29, 0x2D,
+                            0x29, 0x25, 0x2B, 0x39, 0x00, 0x01, 0x03, 0x10}, 16),
+                        TAG, "GMCTRP1 failed");
+    ESP_RETURN_ON_ERROR(write_command_with_data(ST7735_CMD_GMCTRN1,
+                        (const uint8_t[]){
+                            0x03, 0x1D, 0x07, 0x06, 0x2E, 0x2C, 0x29, 0x2D,
+                            0x2E, 0x2E, 0x37, 0x3F, 0x00, 0x00, 0x02, 0x10}, 16),
+                        TAG, "GMCTRN1 failed");
+
+    /* Normal display mode */
+    ESP_RETURN_ON_ERROR(write_command(ST7735_CMD_NORON), TAG, "NORON failed");
+    vTaskDelay(pdMS_TO_TICKS(10));
+
+    /* The screen is switched on */
     ESP_RETURN_ON_ERROR(write_command(ST7735_CMD_DISPON), TAG, "DISPON failed");
+    vTaskDelay(pdMS_TO_TICKS(100));
 
     return ESP_OK;
 }
@@ -251,8 +282,8 @@ esp_err_t st7735_init(const st7735_config_t *config)
     s_rst_gpio = config->rst_gpio;
     s_width = config->width > 0 ? config->width : 128;
     s_height = config->height > 0 ? config->height : 160;
-    s_col_start_portrait = config->col_start;
-    s_row_start_portrait = config->row_start;
+    s_col_start = config->col_start;
+    s_row_start = config->row_start;
     s_bl_gpio = config->bl_gpio;
     s_bl_active_low = config->bl_active_low;
     s_bl_on = false;
@@ -281,15 +312,15 @@ esp_err_t st7735_init(const st7735_config_t *config)
         st7735_set_backlight(false);
     }
 
-    /* The SPI bus. The maximum size of a transfer is the size of the whole
-       memory of the controller, the test patterns use it. */
+    /* The SPI bus. The maximum size of a transfer is the size of a band of
+       the screen, the test patterns use it. */
     const spi_bus_config_t bus_config = {
         .mosi_io_num = config->mosi_gpio,
         .miso_io_num = -1,
         .sclk_io_num = config->sclk_gpio,
         .quadwp_io_num = -1,
         .quadhd_io_num = -1,
-        .max_transfer_sz = 132 * 162 * 2,
+        .max_transfer_sz = SPI_MAX_TRANSFER,
     };
     ESP_RETURN_ON_ERROR(spi_bus_initialize(config->spi_host, &bus_config, SPI_DMA_CH_AUTO),
                         TAG, "spi_bus_initialize() failed");
@@ -321,35 +352,61 @@ esp_err_t st7735_init(const st7735_config_t *config)
 }
 
 /* Write a rectangle of pixels in the memory of the controller. The
-   coordinates are the ones of the memory, they are not the ones of the
-   visible area. */
-static esp_err_t draw_area(int x, int y, int width, int height, const void *data)
+   coordinates are the ones of the memory of the controller, they are not the
+   ones of the visible area of the screen. */
+static esp_err_t write_window(int col_start, int row_start, int width, int height,
+                               const void *data)
 {
-    const int x1 = x;
-    const int y1 = y;
-    const int x2 = x1 + width - 1;
-    const int y2 = y1 + height - 1;
+    const int col_end = col_start + width - 1;
+    const int row_end = row_start + height - 1;
 
-    const uint8_t columns[] = { (uint8_t)(x1 >> 8), (uint8_t)(x1 & 0xFF),
-                                (uint8_t)(x2 >> 8), (uint8_t)(x2 & 0xFF) };
-    const uint8_t rows[] = { (uint8_t)(y1 >> 8), (uint8_t)(y1 & 0xFF),
-                              (uint8_t)(y2 >> 8), (uint8_t)(y2 & 0xFF) };
+    const uint8_t columns[] = { (uint8_t)(col_start >> 8), (uint8_t)(col_start & 0xFF),
+                                (uint8_t)(col_end >> 8), (uint8_t)(col_end & 0xFF) };
+    const uint8_t rows[] = { (uint8_t)(row_start >> 8), (uint8_t)(row_start & 0xFF),
+                             (uint8_t)(row_end >> 8), (uint8_t)(row_end & 0xFF) };
 
     ESP_RETURN_ON_ERROR(write_command_with_data(ST7735_CMD_CASET, columns, sizeof(columns)),
                         TAG, "CASET failed");
     ESP_RETURN_ON_ERROR(write_command_with_data(ST7735_CMD_RASET, rows, sizeof(rows)),
                         TAG, "RASET failed");
-    ESP_RETURN_ON_ERROR(write_command(ST7735_CMD_RAMWR), TAG, "RAMWR failed");
 
-    /* The pixels are sent in the RGB565 format, the most significant byte
-       of a pixel first */
-    const size_t length = (size_t)width * height * 2;
-    spi_transaction_t transaction = {
-        .length = length * 8,
-        .tx_buffer = data,
+    /* The command that starts the write of the pixels and the pixels
+       themselves, the chip select line stays low between them */
+    const uint8_t command = ST7735_CMD_RAMWR;
+    const transfer_t transfers[] = {
+        { &command, 1,               false },
+        { data,    (size_t)width * height * 2, true },
     };
-    gpio_set_level(s_dc_gpio, 1);
-    return spi_device_polling_transmit(s_spi, &transaction);
+    return write_sequence(transfers, sizeof(transfers) / sizeof(transfers[0]));
+}
+
+/* Write a rectangle of pixels on the screen. The coordinates are the ones of
+   the visible area of the screen. */
+static esp_err_t draw_area(int x, int y, int width, int height, const void *data)
+{
+    int x1 = x;
+    int y1 = y;
+    int x2 = x1 + width - 1;
+    int y2 = y1 + height - 1;
+
+    /* The width and the height of the window in the memory of the
+       controller. They are the same as the ones of the rectangle on the
+       screen in the portrait mode. */
+    int win_width = width;
+    int win_height = height;
+
+    /* In the landscape mode the axes of the screen are swapped in the memory
+       of the controller: the x axis of the screen is the row axis and the y
+       axis of the screen is the column axis. */
+    if (is_landscape(s_rotation)) {
+        const int tmp = x1; x1 = y1; y1 = tmp;
+        const int tmp2 = x2; x2 = y2; y2 = tmp2;
+        win_width = height;
+        win_height = width;
+    }
+
+    /* The visible area is offset in the memory of the controller */
+    return write_window(s_col_start + x1, s_row_start + y1, win_width, win_height, data);
 }
 
 esp_err_t st7735_draw_pixels(int x, int y, int width, int height, const void *data)
@@ -360,7 +417,7 @@ esp_err_t st7735_draw_pixels(int x, int y, int width, int height, const void *da
 
     /* The visible area is offset in the memory of the controller */
     panel_lock();
-    const esp_err_t err = draw_area(s_col_start + x, s_row_start + y, width, height, data);
+    const esp_err_t err = draw_area(x, y, width, height, data);
     panel_unlock();
     return err;
 }
@@ -378,7 +435,7 @@ esp_err_t st7735_fill_raw(uint16_t color)
     const int band_height = SPI_MAX_TRANSFER / (width * 2);
 
     const size_t band_pixels = (size_t)width * band_height;
-    uint8_t *buffer = malloc(band_pixels * 2);
+    uint8_t *buffer = heap_caps_malloc(band_pixels * 2, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
     if (buffer == NULL) {
         return ESP_ERR_NO_MEM;
     }
@@ -391,14 +448,14 @@ esp_err_t st7735_fill_raw(uint16_t color)
     esp_err_t err = ESP_OK;
     for (int y = 0; y < height; y += band_height) {
         const int lines = (y + band_height <= height) ? band_height : height - y;
-        err = draw_area(0, y, width, lines, buffer);
+        err = write_window(0, y, width, lines, buffer);
         if (err != ESP_OK) {
             break;
         }
     }
     panel_unlock();
 
-    free(buffer);
+    heap_caps_free(buffer);
     return err;
 }
 
@@ -410,23 +467,23 @@ esp_err_t st7735_set_rotation(st7735_rotation_t rotation)
     madctl |= ST7735_MADCTL_BGR;
 #endif
 
+    /* The orientation of the screen. The values are the ones of the TFT_eSPI
+       library for the ST7735. */
     switch (rotation) {
     case ST7735_ROTATION_0:
         madctl |= ST7735_MADCTL_MX | ST7735_MADCTL_MY;
         break;
     case ST7735_ROTATION_90:
-        madctl |= ST7735_MADCTL_MY;
+        madctl |= ST7735_MADCTL_MY | ST7735_MADCTL_MV;
         break;
     case ST7735_ROTATION_180:
-        madctl |= ST7735_MADCTL_MX;
         break;
     case ST7735_ROTATION_270:
+        madctl |= ST7735_MADCTL_MX | ST7735_MADCTL_MV;
         break;
     default:
         return ESP_ERR_INVALID_ARG;
     }
-
-    set_offsets(rotation, s_col_start_portrait, s_row_start_portrait);
 
     panel_lock();
     const esp_err_t err = write_command_with_data(ST7735_CMD_MADCTL, &madctl, 1);
@@ -445,8 +502,7 @@ st7735_rotation_t st7735_get_rotation(void)
 
 void st7735_get_size(int *width, int *height)
 {
-    const bool landscape = (s_rotation == ST7735_ROTATION_90 ||
-                            s_rotation == ST7735_ROTATION_270);
+    const bool landscape = is_landscape(s_rotation);
     if (width != NULL) {
         *width = landscape ? s_height : s_width;
     }
@@ -530,7 +586,7 @@ esp_err_t st7735_fill(uint16_t color)
     }
 
     const size_t band_pixels = (size_t)width * band_height;
-    uint8_t *buffer = malloc(band_pixels * 2);
+    uint8_t *buffer = heap_caps_malloc(band_pixels * 2, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
     if (buffer == NULL) {
         return ESP_ERR_NO_MEM;
     }
@@ -548,7 +604,7 @@ esp_err_t st7735_fill(uint16_t color)
         }
     }
 
-    free(buffer);
+    heap_caps_free(buffer);
     return err;
 }
 

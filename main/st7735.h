@@ -1,14 +1,16 @@
 /*
  * ST7735S panel driver
  *
- * The driver talks to a ST7735S controller (0.96 inch, 80x160 pixels) over
+ * The driver talks to a ST7735R controller (1.8 inch, 128x160 pixels) over
  * SPI. The controller has 132x162 pixels of memory, the visible area of the
- * module is offset in it, the offset depends on the orientation of the
- * screen.
+ * module is offset in it, the offset depends on the module.
  *
  * The panel is driven in the RGB565 color format, the two bytes of a pixel
  * are sent in the order expected by the controller (the most significant
  * byte first).
+ *
+ * The initialization sequence and the settings of the controller are the
+ * ones of the TFT_eSPI library, which drives the same modules.
  */
 #pragma once
 
@@ -131,8 +133,12 @@ uint8_t st7735_get_madctl(void);
  * @brief  Change the offset of the visible area in the memory of the controller
  *
  * The controller has 132x162 pixels of memory, the visible area of the module
- * is smaller and offset in it. The offset depends on the module, it is
- * 26/1 for the green modules and 24/0 for the red ones.
+ * is smaller and offset in it. The offset depends on the module, it is 0/0
+ * for the 128x160 modules of the RobotLCD type, 2/1 for the 1.8 inch green
+ * modules, 26/1 for the 0.96 inch green modules and 24/0 for the 0.96 inch
+ * red ones.
+ *
+ * The offset does not depend on the orientation of the screen.
  *
  * @param col offset of the first column
  * @param row offset of the first row

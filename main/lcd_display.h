@@ -5,7 +5,7 @@
  *
  *   - it initializes the panel and creates the LVGL display,
  *   - it runs the LVGL handler in its own task,
- *   - it shows the dashboard of the system (see lcd_ui.c).
+ *   - it shows the test screen of the panel (see lcd_ui.c).
  *
  * The objects of LVGL are not thread safe, the other tasks of the
  * application have to take the lock of the display before they touch them.
@@ -38,6 +38,14 @@ void lcd_display_deinit(void);
  * @brief  Whether the display is ready
  */
 bool lcd_display_is_ready(void);
+
+/**
+ * @brief  Get the number of the frames drawn since the last call
+ *
+ * The counter is reset by the call, it is used to measure the number of
+ * frames per second.
+ */
+uint32_t lcd_display_take_frame_count(void);
 
 /**
  * @brief  Get the LVGL display, NULL when the display is not initialized
@@ -83,7 +91,7 @@ int lcd_display_get_rotation(void);
  * @brief  Draw the whole screen again
  *
  * It is useful after a test pattern was drawn directly on the panel: the
- * dashboard is drawn again over it.
+ * test screen is drawn again over it.
  */
 void lcd_display_refresh(void);
 

@@ -136,10 +136,18 @@ The state currently shown is printed by the `status` command.
 ## Display (ST7735 + LVGL)
 
 A ST7735 display (1.8 inch, 128x160 pixels) can be attached to the SPI bus
-of the board. It is driven by [LVGL](https://lvgl.io/) and shows a dashboard of
-the system: the state of the Wi-Fi connection, the IP address, the TCP servers,
-the CPU load, the free memory, the running time and the state of the status
-LED. The dot in the title bar shows the state of the status LED.
+of the board. It is driven by [LVGL](https://lvgl.io/) and shows a test
+screen that checks the driving of the panel:
+
+* a row of eight colors (red, green, blue, white, black, yellow, cyan and
+  magenta) shows if the order of the colors is the expected one,
+* a row of shades of gray shows the depth of the colors,
+* a ball moves in an area, an arc and a bar are animated,
+* a border and four marks in the corners of the screen show if the image is
+  shifted or turned,
+* the size of the screen, the order of the colors, the speed of the SPI bus,
+  the offset of the visible area, the number of frames per second and the
+  running time are shown at the bottom of the screen.
 
 The wiring of the display (7 pins, the module has also a VCC and a GND pin):
 
@@ -159,18 +167,23 @@ inverted as well.
 
 The settings of the panel (size, orientation, offset of the visible area in
 the memory of the controller, color order) are in the same menu. The defaults
-are the ones of a 1.8 inch 128x160 module. The 0.96 inch 80x160 modules need
-a width of 80 and an offset of 26/1 (green) or 24/0 (red).
+are the ones of a 128x160 module driven by the TFT_eSPI library with the
+`ST7735_ROBOTLCD` setting: 128x160 pixels, offset 0/0, RGB order, 10 MHz.
+The 0.96 inch 80x160 modules need a width of 80 and an offset of 26/1 (green)
+or 24/0 (red). The 128x160 modules with a green tab need an offset of 2/1.
 
-The dashboard is refreshed every second. The display can be controlled from the
-console:
+The initialization sequence of the controller, the values of the power and of
+the gamma registers and the orientation of the screen are the ones of the
+TFT_eSPI library, which drives the same modules with the same settings.
+
+The screen can be controlled from the console:
 
 | Command | Description |
 | ------- | ----------- |
 | `lcd_info` | Show the settings of the display |
 | `lcd_backlight [on\|off]` | Switch the backlight on or off |
 | `lcd_rotate [degrees]` | Rotate the screen (0, 90, 180 or 270) |
-| `lcd_refresh` | Draw the dashboard again over the whole screen |
+| `lcd_refresh` | Draw the test screen again over the whole screen |
 | `lcd_test [raw\|map\|pattern\|color]` | Draw a test pattern on the screen |
 | `lcd_offset [col row]` | Show or set the offset of the visible area |
 | `lcd_madctl [value]` | Show or set the MADCTL register of the controller |
@@ -180,6 +193,9 @@ Notes:
 
 * The screen uses the SPI2 peripheral, the other peripherals of the board
   (the three UARTs) are not affected.
+* The chip select line of the panel stays low during the whole exchange of a
+  command and its parameters, the controller resets the parser of the
+  commands when the line goes high.
 * The partition table of the project was enlarged (`partitions.csv`), the
   LVGL library needs about 400 kB of flash.
 * The configuration of LVGL is in `main/lv_conf.h`: the color format, the

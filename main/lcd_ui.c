@@ -1,12 +1,11 @@
 /*
- * Dashboard of the system
+ * Test screen of the display
  *
  * See lcd_ui.h for the description of the module.
  */
 #include <stdio.h>
 #include <string.h>
 
-#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -14,16 +13,12 @@
 
 #include "lcd_display.h"
 #include "lcd_ui.h"
-#include "led_status.h"
-#include "sys_stats.h"
-#include "tcp_server.h"
-#include "uart_bridge.h"
-#include "wifi_manager.h"
+#include "st7735.h"
 
 static const char *TAG = "lcd_ui";
 
-/* Colors of the dashboard */
-#define COLOR_BACKGROUND lv_color_hex(0x101820)
+/* Colors of the test screen */
+#define COLOR_BACKGROUND lv_color_hex(0x0E1621)
 #define COLOR_HEADER     lv_color_hex(0x1B2A3A)
 #define COLOR_TITLE      lv_color_hex(0xE8F1F8)
 #define COLOR_LABEL      lv_color_hex(0x7A8CA0)
@@ -31,38 +26,114 @@ static const char *TAG = "lcd_ui";
 #define COLOR_OK         lv_color_hex(0x4CD964)
 #define COLOR_WARN       lv_color_hex(0xFF9F0A)
 #define COLOR_ERROR      lv_color_hex(0xFF453A)
+#define COLOR_BORDER     lv_color_hex(0x506070)
+#define COLOR_AREA       lv_color_hex(0x16222E)
 
-/* Height of the header of the dashboard */
-#define HEADER_HEIGHT 18
+/* Height of the header of the screen */
+#define HEADER_HEIGHT 15
 
-/* Height of a line of the dashboard */
-#define ROW_HEIGHT 14
+/* Height of the row of the colors */
+#define SWATCH_HEIGHT 14
 
-/* Number of rows of the dashboard */
-#define ROW_COUNT 7
+/* Height of the row of the shades of gray */
+#define RAMP_HEIGHT 6
 
-/* The rows of the dashboard */
-typedef enum {
-    ROW_WIFI = 0,
-    ROW_IP,
-    ROW_SERVER,
-    ROW_CPU,
-    ROW_MEMORY,
-    ROW_UPTIME,
-    ROW_LED,
-} row_id_t;
+/* Height of the row of the arc and of the bar */
+#define WIDGET_HEIGHT 28
 
-typedef struct {
-    lv_obj_t *label;
-    lv_obj_t *value;
-} ui_row_t;
+/* Height of the block of the information */
+#define INFO_HEIGHT 42
 
-static lv_obj_t    *s_header;
-static lv_obj_t    *s_title;
-static lv_obj_t    *s_dot;
-static ui_row_t     s_rows[ROW_COUNT];
+/* Size of the ball that moves in the animation area */
+#define BALL_SIZE 12
+
+/* The objects of the screen */
+static lv_obj_t    *s_ball;
+static lv_obj_t    *s_bar;
+static lv_obj_t    *s_arc;
+static lv_obj_t    *s_fps;
+static lv_obj_t    *s_info;
 static lv_timer_t  *s_timer;
 static bool         s_created;
+
+/* The time when the counter of the frames was reset */
+static int64_t s_frames_time;
+
+/* Move the ball horizontally */
+static void ball_x_cb(void *obj, int32_t value)
+{
+    lv_obj_set_x(obj, value);
+}
+
+/* Move the ball vertically */
+static void ball_y_cb(void *obj, int32_t value)
+{
+    lv_obj_set_y(obj, value);
+}
+
+/* Move the indicator of the bar */
+static void bar_anim_cb(void *obj, int32_t value)
+{
+    lv_bar_set_value((lv_obj_t *)obj, value, LV_ANIM_OFF);
+}
+
+/* Move the indicator of the arc */
+static void arc_anim_cb(void *obj, int32_t value)
+{
+    lv_arc_set_value((lv_obj_t *)obj, value);
+}
+
+/* Create an object that is only a rectangle of a color */
+static lv_obj_t *create_rect(lv_obj_t *parent, int x, int y, int width, int height,
+                             lv_color_t color)
+{
+    lv_obj_t *obj = lv_obj_create(parent);
+    lv_obj_remove_style_all(obj);
+    lv_obj_set_size(obj, width, height);
+    lv_obj_set_pos(obj, x, y);
+    lv_obj_set_style_bg_color(obj, color, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(obj, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_radius(obj, 0, LV_PART_MAIN);
+    lv_obj_set_scrollable(obj, false);
+    return obj;
+}
+
+/* The colors of the eight squares of the first row. They show if the order of
+   the colors of the panel is the expected one. */
+static const uint32_t swatch_colors[] = {
+    0xFF0000,   /* red */
+    0x00FF00,   /* green */
+    0x0000FF,   /* blue */
+    0xFFFFFF,   /* white */
+    0x000000,   /* black */
+    0xFFFF00,   /* yellow */
+    0x00FFFF,   /* cyan */
+    0xFF00FF,   /* magenta */
+};
+
+/* The shades of gray of the second row, from black to white */
+static void create_gray_ramp(lv_obj_t *parent, int x, int y, int width, int height)
+{
+    const int steps = 16;
+    const int step_width = width / steps;
+
+    for (int i = 0; i < steps; i++) {
+        const uint8_t level = (uint8_t)(i * 255 / (steps - 1));
+        create_rect(parent, x + i * step_width, y, step_width, height,
+                    lv_color_make(level, level, level));
+    }
+}
+
+/* The four marks in the corners of the screen. They show if the image is
+   shifted or turned. */
+static void create_corner_marks(lv_obj_t *parent, int width, int height)
+{
+    const int size = 4;
+    create_rect(parent, 0, 0, size, size, COLOR_ERROR);                  /* red */
+    create_rect(parent, width - size, 0, size, size, COLOR_OK);          /* green */
+    create_rect(parent, 0, height - size, size, size, COLOR_WARN);       /* blue */
+    create_rect(parent, width - size, height - size, size, size, COLOR_VALUE);
+}
 
 /* Format the running time as hh:mm:ss */
 static void format_uptime(char *buf, size_t len)
@@ -74,181 +145,193 @@ static void format_uptime(char *buf, size_t len)
     snprintf(buf, len, "%02d:%02d:%02d", hours, minutes, secs);
 }
 
-/* Format a number of bytes as a number of kilobytes */
-static void format_memory(char *buf, size_t len)
+/* Update the information shown at the bottom of the screen */
+static void update_info(lv_timer_t *timer)
 {
-    const uint32_t free_bytes = esp_get_free_heap_size();
-    snprintf(buf, len, "%u kB", (unsigned)(free_bytes / 1024));
-}
+    const int64_t now = esp_timer_get_time();
+    const int64_t elapsed = now - s_frames_time;
 
-/* The state of the TCP servers, on one line */
-static void format_servers(char *buf, size_t len)
-{
-    char servers[16] = { 0 };
-    size_t used = 0;
-
-    for (int uart = 0; uart < UART_BRIDGE_COUNT; uart++) {
-        tcp_server_stats_t stats;
-        tcp_server_get_stats(uart, &stats);
-        if (!stats.running) {
-            continue;
-        }
-        const int written = snprintf(servers + used, sizeof(servers) - used, "%s%d",
-                                     used > 0 ? "," : "", uart);
-        if (written < 0) {
-            break;
-        }
-        used += written;
-        if (used >= sizeof(servers)) {
-            break;
-        }
+    /* The number of frames drawn during the last second */
+    int fps = 0;
+    if (elapsed >= 1000000) {
+        fps = (int)(lcd_display_take_frame_count() * 1000000 / elapsed);
+        s_frames_time = now;
     }
 
-    snprintf(buf, len, "%s", used > 0 ? servers : "none");
+    lv_label_set_text_fmt(s_fps, "%d FPS", fps);
+
+    char uptime[16] = { 0 };
+    format_uptime(uptime, sizeof(uptime));
+
+    int width = 0;
+    int height = 0;
+    lcd_display_get_size(&width, &height);
+
+    int col_start = 0;
+    int row_start = 0;
+    st7735_get_offset(&col_start, &row_start);
+
+    lv_label_set_text_fmt(s_info,
+                          "%dx%d %s %dMHz\n"
+                          "off %d/%d rot %d %s\n"
+                          "LVGL %d.%d.%d %s",
+                          width, height,
+                          (st7735_get_madctl() & 0x08) ? "BGR" : "RGB",
+                          st7735_get_clock() / 1000000,
+                          col_start, row_start,
+                          lcd_display_get_rotation(),
+                          st7735_backlight_is_on() ? "BL on" : "BL off",
+                          LVGL_VERSION_MAJOR, LVGL_VERSION_MINOR, LVGL_VERSION_PATCH,
+                          uptime);
 }
 
-/* Update the content of the dashboard */
-static void update_dashboard(lv_timer_t *timer)
-{
-    char text[32];
-
-    /* The Wi-Fi connection */
-    const bool connected = wifi_manager_is_connected();
-    lv_label_set_text_fmt(s_rows[ROW_WIFI].value, "%s", connected ? "connected" : "offline");
-    lv_obj_set_style_text_color(s_rows[ROW_WIFI].value,
-                                connected ? COLOR_OK : COLOR_WARN, LV_PART_MAIN);
-
-    /* The IP address */
-    char ip[16] = { 0 };
-    if (connected) {
-        wifi_manager_get_ip(ip, sizeof(ip));
-    }
-    lv_label_set_text_fmt(s_rows[ROW_IP].value, "%s", ip[0] != '\0' ? ip : "-");
-
-    /* The TCP servers */
-    format_servers(text, sizeof(text));
-    lv_label_set_text_fmt(s_rows[ROW_SERVER].value, "%s", text);
-
-    /* The CPU load */
-    lv_label_set_text_fmt(s_rows[ROW_CPU].value, "%u%%",
-                          (unsigned)sys_stats_get_cpu_load());
-
-    /* The free memory */
-    format_memory(text, sizeof(text));
-    lv_label_set_text_fmt(s_rows[ROW_MEMORY].value, "%s", text);
-
-    /* The running time */
-    format_uptime(text, sizeof(text));
-    lv_label_set_text_fmt(s_rows[ROW_UPTIME].value, "%s", text);
-
-    /* The state of the status LED */
-    lv_label_set_text_fmt(s_rows[ROW_LED].value, "%s",
-                          led_status_state_name(led_status_get()));
-
-    /* The dot shows the state of the status LED */
-    led_state_t led_state = led_status_get();
-    lv_color_t color;
-    switch (led_state) {
-    case LED_STATE_BOOTING:
-    case LED_STATE_WIFI_DOWN:
-        color = COLOR_WARN;
-        break;
-    case LED_STATE_ERROR:
-        color = COLOR_ERROR;
-        break;
-    default:
-        color = COLOR_OK;
-        break;
-    }
-    lv_obj_set_style_bg_color(s_dot, color, LV_PART_MAIN);
-}
-
-/* The label and the value of a row. The screen is 128 pixels wide, the
-   label takes the first third of it. */
-static void create_row(lv_obj_t *parent, row_id_t id, const char *label, int y)
-{
-    const int screen_width = lv_display_get_horizontal_resolution(lv_display_get_default());
-    const int label_width = screen_width / 4;
-
-    s_rows[id].label = lv_label_create(parent);
-    lv_label_set_text(s_rows[id].label, label);
-    lv_obj_set_style_text_color(s_rows[id].label, COLOR_LABEL, LV_PART_MAIN);
-    lv_obj_set_style_text_font(s_rows[id].label, &lv_font_montserrat_12, LV_PART_MAIN);
-    lv_obj_set_pos(s_rows[id].label, 4, y);
-    lv_obj_set_width(s_rows[id].label, label_width);
-    lv_label_set_long_mode(s_rows[id].label, LV_LABEL_LONG_CLIP);
-
-    s_rows[id].value = lv_label_create(parent);
-    lv_label_set_text(s_rows[id].value, "-");
-    lv_obj_set_style_text_color(s_rows[id].value, COLOR_VALUE, LV_PART_MAIN);
-    lv_obj_set_style_text_font(s_rows[id].value, &lv_font_montserrat_12, LV_PART_MAIN);
-    lv_obj_set_pos(s_rows[id].value, label_width + 6, y);
-    lv_obj_set_width(s_rows[id].value, screen_width - label_width - 10);
-    lv_label_set_long_mode(s_rows[id].value, LV_LABEL_LONG_DOT);
-}
-
+/* Create the screen of the test */
 esp_err_t lcd_ui_create(void)
 {
     if (s_created) {
         return ESP_OK;
     }
 
+    lv_display_t *display = lv_display_get_default();
+    const int width = lv_display_get_horizontal_resolution(display);
+    const int height = lv_display_get_vertical_resolution(display);
+
     lv_obj_t *screen = lv_screen_active();
     lv_obj_set_style_bg_color(screen, COLOR_BACKGROUND, LV_PART_MAIN);
     lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_scroll_dir(screen, LV_DIR_NONE);
 
-    /* The header shows the name of the application and the state of the LED */
-    s_header = lv_obj_create(screen);
-    lv_obj_set_size(s_header, LV_PCT(100), HEADER_HEIGHT);
-    lv_obj_set_pos(s_header, 0, 0);
-    lv_obj_set_style_bg_color(s_header, COLOR_HEADER, LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(s_header, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_border_width(s_header, 0, LV_PART_MAIN);
-    lv_obj_set_style_radius(s_header, 0, LV_PART_MAIN);
-    lv_obj_set_scroll_dir(s_header, LV_DIR_NONE);
+    /* The header shows the name of the test and the number of the frames */
+    lv_obj_t *header = lv_obj_create(screen);
+    lv_obj_remove_style_all(header);
+    lv_obj_set_size(header, width, HEADER_HEIGHT);
+    lv_obj_set_pos(header, 0, 0);
+    lv_obj_set_style_bg_color(header, COLOR_HEADER, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(header, LV_OPA_COVER, LV_PART_MAIN);
 
-    s_title = lv_label_create(s_header);
-    lv_label_set_text(s_title, "SSD Debugger");
-    lv_obj_set_style_text_color(s_title, COLOR_TITLE, LV_PART_MAIN);
-    lv_obj_set_style_text_font(s_title, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_set_pos(s_title, 4, 1);
+    lv_obj_t *title = lv_label_create(header);
+    lv_label_set_text(title, "LVGL TEST");
+    lv_obj_set_style_text_color(title, COLOR_TITLE, LV_PART_MAIN);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_14, LV_PART_MAIN);
+    /* The title is shifted to the right, the mark of the top left corner is
+       drawn over the header */
+    lv_obj_set_pos(title, 6, 0);
 
-    /* The state of the status LED */
-    lv_label_set_text_fmt(s_rows[ROW_LED].value, "%s",
-                          led_status_state_name(led_status_get()));
+    s_fps = lv_label_create(header);
+    lv_label_set_text(s_fps, "0 FPS");
+    lv_obj_set_style_text_color(s_fps, COLOR_OK, LV_PART_MAIN);
+    lv_obj_set_style_text_font(s_fps, &lv_font_montserrat_12, LV_PART_MAIN);
+    lv_obj_set_pos(s_fps, width - 48, 2);
 
-    /* The dot shows the state of the status LED */
-    const int screen_width = lv_display_get_horizontal_resolution(lv_display_get_default());
-    s_dot = lv_obj_create(s_header);
-    lv_obj_set_size(s_dot, 8, 8);
-    lv_obj_set_pos(s_dot, screen_width - 14, 5);
-    lv_obj_set_style_bg_opa(s_dot, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_border_width(s_dot, 0, LV_PART_MAIN);
-    lv_obj_set_style_radius(s_dot, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+    /* The row of the colors, it shows if the order of the colors is the
+       expected one */
+    int y = HEADER_HEIGHT;
+    const int swatch_width = width / (int)(sizeof(swatch_colors) / sizeof(swatch_colors[0]));
+    for (size_t i = 0; i < sizeof(swatch_colors) / sizeof(swatch_colors[0]); i++) {
+        create_rect(screen, (int)i * swatch_width, y, swatch_width, SWATCH_HEIGHT,
+                    lv_color_hex(swatch_colors[i]));
+    }
+    y += SWATCH_HEIGHT;
 
-    /* The rows of the dashboard */
-    int y = HEADER_HEIGHT + 4;
-    create_row(screen, ROW_WIFI, "WiFi", y);
-    y += ROW_HEIGHT;
-    create_row(screen, ROW_IP, "IP", y);
-    y += ROW_HEIGHT;
-    create_row(screen, ROW_SERVER, "TCP", y);
-    y += ROW_HEIGHT;
-    create_row(screen, ROW_CPU, "CPU", y);
-    y += ROW_HEIGHT;
-    create_row(screen, ROW_MEMORY, "MEM", y);
-    y += ROW_HEIGHT;
-    create_row(screen, ROW_UPTIME, "UP", y);
-    y += ROW_HEIGHT;
-    create_row(screen, ROW_LED, "LED", y);
+    /* The row of the shades of gray */
+    create_gray_ramp(screen, 0, y, width, RAMP_HEIGHT);
+    y += RAMP_HEIGHT;
 
-    /* The timer that refreshes the content of the dashboard */
-    s_timer = lv_timer_create(update_dashboard, 1000, NULL);
-    lv_timer_ready(s_timer);
+    /* The area of the animation, it takes all the space that is left */
+    int area_height = height - y - WIDGET_HEIGHT - INFO_HEIGHT;
+    if (area_height < 0) {
+        area_height = 0;
+    }
+    lv_obj_t *area = create_rect(screen, 0, y, width, area_height, COLOR_AREA);
+
+    /* The ball moves in the area */
+    s_ball = create_rect(area, 0, 0, BALL_SIZE, BALL_SIZE, COLOR_WARN);
+    lv_obj_set_style_radius(s_ball, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+
+    lv_anim_t anim_x;
+    lv_anim_init(&anim_x);
+    lv_anim_set_var(&anim_x, s_ball);
+    lv_anim_set_exec_cb(&anim_x, ball_x_cb);
+    lv_anim_set_values(&anim_x, 0, area_height > 0 ? width - BALL_SIZE : 0);
+    lv_anim_set_duration(&anim_x, 1600);
+    lv_anim_set_path_cb(&anim_x, lv_anim_path_bounce);
+    lv_anim_set_repeat_count(&anim_x, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_start(&anim_x);
+
+    lv_anim_t anim_y;
+    lv_anim_init(&anim_y);
+    lv_anim_set_var(&anim_y, s_ball);
+    lv_anim_set_exec_cb(&anim_y, ball_y_cb);
+    lv_anim_set_values(&anim_y, 0, area_height > 0 ? area_height - BALL_SIZE : 0);
+    lv_anim_set_duration(&anim_y, 2400);
+    lv_anim_set_path_cb(&anim_y, lv_anim_path_bounce);
+    lv_anim_set_repeat_count(&anim_y, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_start(&anim_y);
+
+    y += area_height;
+
+    /* The arc and the bar show that the animations work */
+    s_arc = lv_arc_create(screen);
+    lv_obj_set_size(s_arc, 28, 28);
+    lv_obj_set_pos(s_arc, 2, y);
+    lv_arc_set_range(s_arc, 0, 100);
+    lv_arc_set_value(s_arc, 25);
+    lv_arc_set_rotation(s_arc, 270);
+    lv_obj_set_style_arc_color(s_arc, COLOR_BORDER, LV_PART_MAIN);
+    lv_obj_set_style_arc_color(s_arc, COLOR_OK, LV_PART_INDICATOR);
+
+    lv_anim_t anim_arc;
+    lv_anim_init(&anim_arc);
+    lv_anim_set_var(&anim_arc, s_arc);
+    lv_anim_set_exec_cb(&anim_arc, arc_anim_cb);
+    lv_anim_set_values(&anim_arc, 0, 100);
+    lv_anim_set_duration(&anim_arc, 2000);
+    lv_anim_set_repeat_count(&anim_arc, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_start(&anim_arc);
+
+    s_bar = lv_bar_create(screen);
+    lv_obj_set_size(s_bar, width - 38, 10);
+    lv_obj_set_pos(s_bar, 34, y + 9);
+    lv_bar_set_range(s_bar, 0, 100);
+    lv_bar_set_value(s_bar, 50, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(s_bar, COLOR_BORDER, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(s_bar, COLOR_OK, LV_PART_INDICATOR);
+    lv_obj_set_style_radius(s_bar, 2, LV_PART_MAIN);
+
+    lv_anim_t anim_bar;
+    lv_anim_init(&anim_bar);
+    lv_anim_set_var(&anim_bar, s_bar);
+    lv_anim_set_exec_cb(&anim_bar, bar_anim_cb);
+    lv_anim_set_values(&anim_bar, 0, 100);
+    lv_anim_set_duration(&anim_bar, 1500);
+    lv_anim_set_repeat_count(&anim_bar, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_start(&anim_bar);
+
+    y += WIDGET_HEIGHT;
+
+    /* The information about the panel */
+    s_info = lv_label_create(screen);
+    lv_label_set_text(s_info, "");
+    lv_obj_set_style_text_color(s_info, COLOR_VALUE, LV_PART_MAIN);
+    lv_obj_set_style_text_font(s_info, &lv_font_montserrat_10, LV_PART_MAIN);
+    lv_obj_set_style_text_line_space(s_info, 0, LV_PART_MAIN);
+    lv_obj_set_pos(s_info, 3, y);
+
+    /* The border and the marks in the corners, they show if the image is
+       shifted or turned */
+    lv_obj_t *border = create_rect(screen, 1, 1, width - 2, height - 2, COLOR_BACKGROUND);
+    lv_obj_set_style_bg_opa(border, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(border, 1, LV_PART_MAIN);
+    lv_obj_set_style_border_color(border, COLOR_BORDER, LV_PART_MAIN);
+
+    create_corner_marks(screen, width, height);
+
+    /* The timer that refreshes the information */
+    s_frames_time = esp_timer_get_time();
+    s_timer = lv_timer_create(update_info, 500, NULL);
 
     s_created = true;
-    ESP_LOGI(TAG, "Dashboard created");
+    ESP_LOGI(TAG, "Test screen created (%dx%d)", width, height);
     return ESP_OK;
 }
 
@@ -263,8 +346,8 @@ void lcd_ui_recreate(void)
         s_timer = NULL;
     }
 
-    /* The screen of LVGL is emptied and the dashboard is built again with the
-       new size of the screen */
+    /* The screen of LVGL is emptied and the test screen is built again with
+       the new size of the screen */
     lv_obj_clean(lv_screen_active());
     s_created = false;
 

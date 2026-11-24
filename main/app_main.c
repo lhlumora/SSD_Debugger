@@ -45,8 +45,8 @@ void app_main(void)
 #endif
 
 #if CONFIG_EXAMPLE_LCD_ENABLE
-    /* The display shows the dashboard of the system. A failure of the display
-       must not stop the application, the error is only logged. */
+    /* The display shows the test screen of the panel. A failure of the
+       display must not stop the application, the error is only logged. */
     if (lcd_display_init() != ESP_OK) {
         ESP_LOGE(TAG, "The display could not be initialized");
     }
