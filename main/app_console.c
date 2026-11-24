@@ -891,8 +891,15 @@ static int cmd_lcd_test(int argc, char **argv)
         color = 0xFFFF;
     } else if (strcmp(argv[1], "black") == 0) {
         color = 0x0000;
+    } else if (strcmp(argv[1], "cyan") == 0) {
+        color = 0x07FF;
+    } else if (strcmp(argv[1], "magenta") == 0) {
+        color = 0xF81F;
+    } else if (strcmp(argv[1], "yellow") == 0) {
+        color = 0xFFE0;
     } else {
-        printf("Usage: lcd_test [raw|map|pattern|red|green|blue|white|black]\n");
+        printf("Usage: lcd_test [raw|map|pattern|red|green|blue|cyan|magenta|"
+               "yellow|white|black]\n");
         return 1;
     }
 
@@ -1147,11 +1154,12 @@ static const help_cmd_t s_help_display[] = {
         .summary = "Draw a test pattern on the display.",
         .args    = "  <pattern|color>  'pattern' draws a border and four colored\n"
                    "                 blocks, a color ('red', 'green', 'blue',\n"
-                   "                 'white' or 'black') fills the screen",
+                   "                 'cyan', 'magenta', 'yellow', 'white' or\n"
+                   "                 'black') fills the screen",
         .note    = "  The test patterns are drawn without LVGL, they show if\n"
                    "  the panel is driven correctly.",
         .example = "  lcd_test pattern\n"
-                   "  lcd_test white",
+                   "  lcd_test magenta",
     },
     {
         .syntax  = "lcd_clock [hz]",

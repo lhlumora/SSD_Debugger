@@ -124,15 +124,23 @@ static void create_gray_ramp(lv_obj_t *parent, int x, int y, int width, int heig
     }
 }
 
+/* The colors of the marks in the corners of the screen. They are the
+   primary colors, they show at a glance if the image is shifted, turned or
+   mirrored. */
+#define COLOR_MARK_TOP_LEFT     lv_color_hex(0xFF0000)   /* red */
+#define COLOR_MARK_TOP_RIGHT    lv_color_hex(0x00FF00)   /* green */
+#define COLOR_MARK_BOTTOM_LEFT  lv_color_hex(0x0000FF)   /* blue */
+#define COLOR_MARK_BOTTOM_RIGHT lv_color_hex(0xFFFF00)   /* yellow */
+
 /* The four marks in the corners of the screen. They show if the image is
    shifted or turned. */
 static void create_corner_marks(lv_obj_t *parent, int width, int height)
 {
     const int size = 4;
-    create_rect(parent, 0, 0, size, size, COLOR_ERROR);                  /* red */
-    create_rect(parent, width - size, 0, size, size, COLOR_OK);          /* green */
-    create_rect(parent, 0, height - size, size, size, COLOR_WARN);       /* blue */
-    create_rect(parent, width - size, height - size, size, size, COLOR_VALUE);
+    create_rect(parent, 0, 0, size, size, COLOR_MARK_TOP_LEFT);
+    create_rect(parent, width - size, 0, size, size, COLOR_MARK_TOP_RIGHT);
+    create_rect(parent, 0, height - size, size, size, COLOR_MARK_BOTTOM_LEFT);
+    create_rect(parent, width - size, height - size, size, size, COLOR_MARK_BOTTOM_RIGHT);
 }
 
 /* Format the running time as hh:mm:ss */
