@@ -206,6 +206,20 @@ Notes:
 * The chip select line of the panel stays low during the whole exchange of a
   command and its parameters, the controller resets the parser of the
   commands when the line goes high.
+* The ST7789 (240x240) is driven with the SPI mode 3 (the clock idles high
+  and the data is sampled on the falling edge) and the ST7735 with the mode
+  0, these are the modes used by the TFT_eSPI library. Some ST7789 modules
+  do not work with the mode 0.
+* The 240x240 modules need a slow SPI bus (2.7 MHz), the screen stays black
+  when the bus is too fast. The TFT_eSPI library sends the bytes one by one,
+  which leaves the controller time between them, the driver of this project
+  sends a whole row of pixels in a single transfer and the module cannot keep
+  up above a few MHz.
+* The ST7789 needs at least 120 ms after the release of its reset line
+  before it accepts the first command, and it needs 500 ms after the sleep
+  out command. The initialization sequence of the driver starts with a
+  software reset and waits for these delays, otherwise the controller stays
+  in its sleep mode and the screen stays black.
 * The offset of the visible area in the memory of the controller is 0/0 for
   the two modules. The 0.96 inch 80x160 modules need an offset of 26/1
   (green) or 24/0 (red), the 128x160 modules with a green tab need 2/1.

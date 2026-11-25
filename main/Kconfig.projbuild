@@ -239,6 +239,14 @@ menu "Example Configuration"
                 2.7 MHz. The speed can be changed at runtime with the
                 'lcd_clock' command.
 
+                The 240x240 modules (ST7789) are not driven correctly when
+                the speed is too high: the screen stays black. The TFT_eSPI
+                library sends the bytes one by one, which gives the
+                controller time between them, the driver of this project
+                sends them in a single transfer, the module cannot keep up
+                above a few MHz. Keep the default value (2.7 MHz) for these
+                modules.
+
         config EXAMPLE_LCD_ROTATION
             int "Rotation of the screen (degrees)"
             range 0 360

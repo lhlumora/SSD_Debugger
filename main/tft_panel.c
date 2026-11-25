@@ -111,6 +111,7 @@ static int   s_height = 160;
 static tft_panel_controller_t s_controller = TFT_PANEL_ST7735;
 static bool  s_bgr;       /* the colors are in the BGR order */
 static bool  s_invert;    /* the colors of the panel are inverted */
+static uint8_t s_spi_mode; /* the mode of the SPI bus (0 to 3) */
 
 /* The panel is used by the task of LVGL and by the tasks of the console,
    the accesses are serialized with this mutex. */
@@ -225,9 +226,13 @@ static void reset_panel(void)
     gpio_set_level(s_rst_gpio, 1);
     vTaskDelay(pdMS_TO_TICKS(10));
     gpio_set_level(s_rst_gpio, 0);
-    vTaskDelay(pdMS_TO_TICKS(100));
+    vTaskDelay(pdMS_TO_TICKS(20));
     gpio_set_level(s_rst_gpio, 1);
-    vTaskDelay(pdMS_TO_TICKS(100));
+
+    /* The ST7789 needs at least 120 ms after the release of the reset line
+       before the first command is accepted, the delay of the TFT_eSPI
+       library is 150 ms. */
+    vTaskDelay(pdMS_TO_TICKS(200));
 }
 
 /* The initialization sequence of the ST7735R controller.
@@ -314,9 +319,16 @@ static esp_err_t init_sequence_st7735(void)
  * display), which drives the same modules with the same settings. */
 static esp_err_t init_sequence_st7789(bool invert)
 {
-    /* Sleep out */
+    /* Software reset, it puts the controller in a known state. The command is
+       ignored when the controller did not leave the reset state yet, the
+       delay after the release of the reset line (see reset_panel()) has to be
+       long enough. */
+    ESP_RETURN_ON_ERROR(write_command(ST7789_CMD_SWRESET), TAG, "SWRESET failed");
+    vTaskDelay(pdMS_TO_TICKS(150));
+
+    /* Sleep out, the controller needs 500 ms to be ready */
     ESP_RETURN_ON_ERROR(write_command(ST7789_CMD_SLPOUT), TAG, "SLPOUT failed");
-    vTaskDelay(pdMS_TO_TICKS(120));
+    vTaskDelay(pdMS_TO_TICKS(500));
 
     /* Normal display mode */
     ESP_RETURN_ON_ERROR(write_command(ST7789_CMD_NORON), TAG, "NORON failed");
@@ -482,6 +494,12 @@ esp_err_t tft_panel_init(const tft_panel_config_t *config)
     s_bl_active_low = config->bl_active_low;
     s_bl_on = false;
 
+    /* The mode of the SPI bus. The TFT_eSPI library uses the mode 3 for the
+       ST7789 (some of these modules do not work with the mode 0, the clock
+       idles high and the data is sampled on the falling edge) and the mode 0
+       for the ST7735. */
+    s_spi_mode = (config->controller == TFT_PANEL_ST7789) ? 3 : 0;
+
     /* The GPIOs of the panel. The CS is driven by the SPI driver, it is not
        configured here. */
     const gpio_config_t output_config = {
@@ -522,7 +540,7 @@ esp_err_t tft_panel_init(const tft_panel_config_t *config)
     const spi_device_interface_config_t device_config = {
         .clock_speed_hz = config->clock_speed_hz > 0 ? config->clock_speed_hz
                                                      : TFT_PANEL_DEFAULT_CLOCK_HZ,
-        .mode = 0,               /* the controller samples the clock on the rising edge */
+        .mode = s_spi_mode,
         .spics_io_num = config->cs_gpio,
         .queue_size = 1,
     };
@@ -545,9 +563,10 @@ esp_err_t tft_panel_init(const tft_panel_config_t *config)
     ESP_RETURN_ON_ERROR(tft_panel_set_rotation(config->rotation), TAG,
                         "tft_panel_set_rotation() failed");
 
-    ESP_LOGI(TAG, "%s %dx%d ready (offset %d/%d), SPI%d, %d Hz, rotation %d",
+    ESP_LOGI(TAG, "%s %dx%d ready (offset %d/%d), SPI%d mode %d, %d Hz, rotation %d",
              s_controller == TFT_PANEL_ST7789 ? "ST7789" : "ST7735",
              s_width, s_height, s_col_start, s_row_start, config->spi_host + 1,
+             s_spi_mode,
              config->clock_speed_hz > 0 ? config->clock_speed_hz : TFT_PANEL_DEFAULT_CLOCK_HZ,
              (int)config->rotation);
 
@@ -902,7 +921,7 @@ esp_err_t tft_panel_set_clock(int clock_speed_hz)
 
     const spi_device_interface_config_t device_config = {
         .clock_speed_hz = clock_speed_hz,
-        .mode = 0,
+        .mode = s_spi_mode,
         .spics_io_num = s_cs_gpio,
         .queue_size = 1,
     };
