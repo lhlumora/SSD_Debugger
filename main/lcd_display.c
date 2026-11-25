@@ -16,7 +16,7 @@
 
 #include "lcd_display.h"
 #include "lcd_ui.h"
-#include "st7735.h"
+#include "tft_panel.h"
 
 static const char *TAG = "lcd_display";
 
@@ -48,6 +48,36 @@ static uint32_t tick_get_cb(void)
     return (uint32_t)(esp_timer_get_time() / 1000);
 }
 
+/* Convert an angle in degrees to an orientation of the screen */
+static tft_panel_rotation_t rotation_from_degrees(int degrees)
+{
+    switch (degrees) {
+    case 90:
+        return TFT_PANEL_ROTATION_90;
+    case 180:
+        return TFT_PANEL_ROTATION_180;
+    case 270:
+        return TFT_PANEL_ROTATION_270;
+    default:
+        return TFT_PANEL_ROTATION_0;
+    }
+}
+
+/* Convert an orientation of the screen to an angle in degrees */
+static int degrees_from_rotation(tft_panel_rotation_t rotation)
+{
+    switch (rotation) {
+    case TFT_PANEL_ROTATION_90:
+        return 90;
+    case TFT_PANEL_ROTATION_180:
+        return 180;
+    case TFT_PANEL_ROTATION_270:
+        return 270;
+    default:
+        return 0;
+    }
+}
+
 /* The pixels are sent to the controller in the RGB565 format, the most
    significant byte of a pixel first. LVGL stores them in the opposite order,
    the bytes are swapped here, in place, in the draw buffer. */
@@ -75,7 +105,7 @@ static void flush_callback(lv_display_t *display, const lv_area_t *area, uint8_t
     }
 
     swap_bytes(pixels, (size_t)width * height * 2);
-    st7735_draw_pixels(area->x1, area->y1, width, height, pixels);
+    tft_panel_draw_pixels(area->x1, area->y1, width, height, pixels);
 
     s_frame_count++;
 
@@ -104,7 +134,12 @@ esp_err_t lcd_display_init(void)
     /* The value of the menuconfig is the number of the peripheral (1, 2 or
        3), the enumeration of the driver starts at 0. On the ESP32-S3 the
        SPI3 is the bus of the flash and of the PSRAM, it must not be used. */
-    const st7735_config_t panel_config = {
+    const tft_panel_config_t panel_config = {
+#if CONFIG_EXAMPLE_LCD_ST7789
+        .controller = TFT_PANEL_ST7789,
+#else
+        .controller = TFT_PANEL_ST7735,
+#endif
         .spi_host = (spi_host_device_t)(CONFIG_EXAMPLE_LCD_SPI_HOST - 1),
         .sclk_gpio = CONFIG_EXAMPLE_LCD_SCLK_GPIO,
         .mosi_gpio = CONFIG_EXAMPLE_LCD_MOSI_GPIO,
@@ -118,21 +153,31 @@ esp_err_t lcd_display_init(void)
         .bl_active_low = false,
 #endif
         .clock_speed_hz = CONFIG_EXAMPLE_LCD_SPI_CLOCK_HZ,
-        .rotation = CONFIG_EXAMPLE_LCD_ROTATION,
+        .rotation = rotation_from_degrees(CONFIG_EXAMPLE_LCD_ROTATION),
         .width = CONFIG_EXAMPLE_LCD_WIDTH,
         .height = CONFIG_EXAMPLE_LCD_HEIGHT,
         .col_start = CONFIG_EXAMPLE_LCD_COL_START,
         .row_start = CONFIG_EXAMPLE_LCD_ROW_START,
+#if CONFIG_EXAMPLE_LCD_BGR_ORDER
+        .bgr = true,
+#else
+        .bgr = false,
+#endif
+#if CONFIG_EXAMPLE_LCD_INVERT_COLORS
+        .invert = true,
+#else
+        .invert = false,
+#endif
     };
 
-    ESP_RETURN_ON_ERROR(st7735_init(&panel_config), TAG, "st7735_init() failed");
+    ESP_RETURN_ON_ERROR(tft_panel_init(&panel_config), TAG, "tft_panel_init() failed");
 
     lv_init();
     lv_tick_set_cb(tick_get_cb);
 
     int width = 0;
     int height = 0;
-    st7735_get_size(&width, &height);
+    tft_panel_get_size(&width, &height);
 
     s_display = lv_display_create(width, height);
     ESP_RETURN_ON_FALSE(s_display != NULL, ESP_ERR_NO_MEM, TAG, "lv_display_create() failed");
@@ -216,7 +261,7 @@ void lcd_display_unlock(void)
 
 void lcd_display_get_size(int *width, int *height)
 {
-    st7735_get_size(width, height);
+    tft_panel_get_size(width, height);
 }
 
 esp_err_t lcd_display_set_rotation(int rotation)
@@ -229,17 +274,17 @@ esp_err_t lcd_display_set_rotation(int rotation)
        can be called from another task than the LVGL one */
     lv_lock();
 
-    esp_err_t err = st7735_set_rotation((st7735_rotation_t)rotation);
+    esp_err_t err = tft_panel_set_rotation(rotation_from_degrees(rotation));
     if (err != ESP_OK) {
         lv_unlock();
-        ESP_RETURN_ON_ERROR(err, TAG, "st7735_set_rotation() failed");
+        ESP_RETURN_ON_ERROR(err, TAG, "tft_panel_set_rotation() failed");
     }
 
     /* The size of the screen changed, the draw buffer and the dashboard have
        to be rebuilt */
     int width = 0;
     int height = 0;
-    st7735_get_size(&width, &height);
+    tft_panel_get_size(&width, &height);
 
     int lines = LCD_MAX_TRANSFER / (width * sizeof(uint16_t));
     if (lines > LCD_BUFFER_LINES) {
@@ -271,7 +316,7 @@ esp_err_t lcd_display_set_rotation(int rotation)
 
 int lcd_display_get_rotation(void)
 {
-    return (int)st7735_get_rotation();
+    return degrees_from_rotation(tft_panel_get_rotation());
 }
 
 void lcd_display_refresh(void)
@@ -290,10 +335,10 @@ void lcd_display_refresh(void)
 
 void lcd_display_set_backlight(bool on)
 {
-    st7735_set_backlight(on);
+    tft_panel_set_backlight(on);
 }
 
 bool lcd_display_backlight_is_on(void)
 {
-    return st7735_backlight_is_on();
+    return tft_panel_backlight_is_on();
 }

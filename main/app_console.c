@@ -37,7 +37,7 @@
 #include "sys_stats.h"
 #if CONFIG_EXAMPLE_LCD_ENABLE
 #include "lcd_display.h"
-#include "st7735.h"
+#include "tft_panel.h"
 #endif
 #if CONFIG_EXAMPLE_LED_GPIO >= 0
 #include "led_status.h"
@@ -817,19 +817,25 @@ static int cmd_lcd_info(int argc, char **argv)
 
     int col_start = 0;
     int row_start = 0;
-    st7735_get_offset(&col_start, &row_start);
+    tft_panel_get_offset(&col_start, &row_start);
 
-    printf("Display: ST7735S %dx%d, rotation %d, backlight %s\n",
-           width, height, lcd_display_get_rotation(),
+#if CONFIG_EXAMPLE_LCD_ST7789
+    const char *controller = "ST7789";
+#else
+    const char *controller = "ST7735";
+#endif
+
+    printf("Display: %s %dx%d, rotation %d, backlight %s\n",
+           controller, width, height, lcd_display_get_rotation(),
            lcd_display_backlight_is_on() ? "on" : "off");
     printf("SPI: SCLK=%d SDA=%d CS=%d DC=%d RES=%d BL=%d, %d Hz\n",
            CONFIG_EXAMPLE_LCD_SCLK_GPIO, CONFIG_EXAMPLE_LCD_MOSI_GPIO,
            CONFIG_EXAMPLE_LCD_CS_GPIO, CONFIG_EXAMPLE_LCD_DC_GPIO,
            CONFIG_EXAMPLE_LCD_RST_GPIO, CONFIG_EXAMPLE_LCD_BL_GPIO,
-           st7735_get_clock());
+           tft_panel_get_clock());
     printf("Colors: %s order, MADCTL 0x%02X, visible area at %d/%d\n",
-           (st7735_get_madctl() & 0x08) ? "BGR" : "RGB",
-           st7735_get_madctl(), col_start, row_start);
+           (tft_panel_get_madctl() & 0x08) ? "BGR" : "RGB",
+           tft_panel_get_madctl(), col_start, row_start);
     return 0;
 }
 
@@ -850,7 +856,7 @@ static int cmd_lcd_test(int argc, char **argv)
     if (strcmp(argv[1], "raw") == 0) {
         /* The whole memory of the controller is filled, the visible area of
            the module shows it whatever its offset is */
-        if (st7735_fill_raw(0x07E0) != ESP_OK) {
+        if (tft_panel_fill_raw(0x07E0) != ESP_OK) {
             printf("Failed to fill the memory of the controller.\n");
             return 1;
         }
@@ -863,7 +869,7 @@ static int cmd_lcd_test(int argc, char **argv)
            left corner, a blue block in the bottom right corner, a green line
            in the middle of the height and an orange line in the middle of
            the width */
-        if (st7735_draw_map_pattern() != ESP_OK) {
+        if (tft_panel_draw_map_pattern() != ESP_OK) {
             printf("Failed to draw the mapping pattern.\n");
             return 1;
         }
@@ -872,7 +878,7 @@ static int cmd_lcd_test(int argc, char **argv)
     }
 
     if (strcmp(argv[1], "pattern") == 0) {
-        if (st7735_draw_test_pattern() != ESP_OK) {
+        if (tft_panel_draw_test_pattern() != ESP_OK) {
             printf("Failed to draw the test pattern.\n");
             return 1;
         }
@@ -903,7 +909,7 @@ static int cmd_lcd_test(int argc, char **argv)
         return 1;
     }
 
-    if (st7735_fill(color) != ESP_OK) {
+    if (tft_panel_fill(color) != ESP_OK) {
         printf("Failed to fill the screen.\n");
         return 1;
     }
@@ -919,17 +925,17 @@ static int cmd_lcd_clock(int argc, char **argv)
     }
 
     if (argc < 2) {
-        printf("The SPI clock of the display is %d Hz.\n", st7735_get_clock());
+        printf("The SPI clock of the display is %d Hz.\n", tft_panel_get_clock());
         return 0;
     }
 
     const int clock = atoi(argv[1]);
-    if (st7735_set_clock(clock) != ESP_OK) {
+    if (tft_panel_set_clock(clock) != ESP_OK) {
         printf("Failed to set the speed of the SPI bus.\n");
         return 1;
     }
 
-    printf("The SPI clock of the display is %d Hz.\n", st7735_get_clock());
+    printf("The SPI clock of the display is %d Hz.\n", tft_panel_get_clock());
     return 0;
 }
 
@@ -942,7 +948,7 @@ static int cmd_lcd_madctl(int argc, char **argv)
 
     if (argc < 2) {
         printf("The MADCTL register of the controller is 0x%02X.\n",
-               st7735_get_madctl());
+               tft_panel_get_madctl());
         return 0;
     }
 
@@ -952,12 +958,12 @@ static int cmd_lcd_madctl(int argc, char **argv)
         return 1;
     }
 
-    if (st7735_set_madctl((uint8_t)value) != ESP_OK) {
+    if (tft_panel_set_madctl((uint8_t)value) != ESP_OK) {
         printf("Failed to set the MADCTL register.\n");
         return 1;
     }
     printf("The MADCTL register of the controller is 0x%02X.\n",
-           st7735_get_madctl());
+           tft_panel_get_madctl());
     return 0;
 }
 
@@ -982,7 +988,7 @@ static int cmd_lcd_offset(int argc, char **argv)
 
     int col = 0;
     int row = 0;
-    st7735_get_offset(&col, &row);
+    tft_panel_get_offset(&col, &row);
 
     if (argc < 3) {
         printf("The offset of the visible area is %d/%d.\n", col, row);
@@ -991,7 +997,7 @@ static int cmd_lcd_offset(int argc, char **argv)
 
     const int new_col = atoi(argv[1]);
     const int new_row = atoi(argv[2]);
-    if (st7735_set_offset(new_col, new_row) != ESP_OK) {
+    if (tft_panel_set_offset(new_col, new_row) != ESP_OK) {
         printf("Invalid offset.\n");
         return 1;
     }

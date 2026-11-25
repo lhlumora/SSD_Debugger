@@ -133,11 +133,25 @@ pattern shows the state of the system:
 
 The state currently shown is printed by the `status` command.
 
-## Display (ST7735 + LVGL)
+## Display (TFT panel + LVGL)
 
-A ST7735 display (1.8 inch, 128x160 pixels) can be attached to the SPI bus
-of the board. It is driven by [LVGL](https://lvgl.io/) and shows a test
-screen that checks the driving of the panel:
+A TFT display can be attached to the SPI bus of the board. Two controllers
+are supported, they use the same pins so only one of them can be connected
+at a time:
+
+| Controller | Module | Resolution | Colors | SPI clock |
+| ---------- | ------ | ---------- | ------ | --------- |
+| ST7735 | 1.8 inch | 128x160 | RGB | 10 MHz |
+| ST7789 | 1.54 inch | 240x240 | BGR | 2.7 MHz |
+
+The controller is selected in the menuconfig (Example Configuration Options ->
+Display -> "Controller of the display"). The other settings of the panel
+(size, orientation, offset of the visible area in the memory of the
+controller, order of the colors) are in the same menu, they have a default
+value for each controller.
+
+The display is driven by [LVGL](https://lvgl.io/) and shows a test screen
+that checks the driving of the panel:
 
 * a row of eight colors (red, green, blue, white, black, yellow, cyan and
   magenta) shows if the order of the colors is the expected one,
@@ -148,6 +162,9 @@ screen that checks the driving of the panel:
 * the size of the screen, the order of the colors, the speed of the SPI bus,
   the offset of the visible area, the number of frames per second and the
   running time are shown at the bottom of the screen.
+
+The size of the elements of the test screen is computed from the size of the
+screen, the same test is used with the two modules.
 
 The wiring of the display (7 pins, the module has also a VCC and a GND pin):
 
@@ -161,16 +178,9 @@ The wiring of the display (7 pins, the module has also a VCC and a GND pin):
 | BL     | Backlight | 9 |
 
 All the pins are configurable in menuconfig -> Example Configuration Options ->
-Display (ST7735). The backlight can be switched off when it is not connected
-to a GPIO (set its number to -1), the polarity of the backlight can be
-inverted as well.
-
-The settings of the panel (size, orientation, offset of the visible area in
-the memory of the controller, color order) are in the same menu. The defaults
-are the ones of a 128x160 module driven by the TFT_eSPI library with the
-`ST7735_ROBOTLCD` setting: 128x160 pixels, offset 0/0, RGB order, 10 MHz.
-The 0.96 inch 80x160 modules need a width of 80 and an offset of 26/1 (green)
-or 24/0 (red). The 128x160 modules with a green tab need an offset of 2/1.
+Display (TFT panel). The backlight can be switched off when it is not
+connected to a GPIO (set its number to -1), the polarity of the backlight can
+be inverted as well.
 
 The initialization sequence of the controller, the values of the power and of
 the gamma registers and the orientation of the screen are the ones of the
@@ -196,6 +206,9 @@ Notes:
 * The chip select line of the panel stays low during the whole exchange of a
   command and its parameters, the controller resets the parser of the
   commands when the line goes high.
+* The offset of the visible area in the memory of the controller is 0/0 for
+  the two modules. The 0.96 inch 80x160 modules need an offset of 26/1
+  (green) or 24/0 (red), the 128x160 modules with a green tab need 2/1.
 * The partition table of the project was enlarged (`partitions.csv`), the
   LVGL library needs about 400 kB of flash.
 * The configuration of LVGL is in `main/lv_conf.h`: the color format, the

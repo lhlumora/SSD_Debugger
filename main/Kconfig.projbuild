@@ -138,17 +138,32 @@ menu "Example Configuration"
             Disable this option only if the console is used with a terminal
             that really does not support escape sequences.
 
-    menu "Display (ST7735S)"
+    menu "Display (TFT panel)"
 
         config EXAMPLE_LCD_ENABLE
             bool "Enable the display"
             default y
             help
-                Drive the ST7735S display of the board with LVGL. The display
+                Drive the TFT display of the board with LVGL. The display
                 shows a test screen that checks the driving of the panel: the
                 order of the colors, the shades of gray, the animations and
                 the position of the visible area in the memory of the
                 controller.
+
+        choice EXAMPLE_LCD_CONTROLLER
+            prompt "Controller of the display"
+            default EXAMPLE_LCD_ST7735
+            help
+                The controller of the display. The two modules use the same
+                pins (SCL, SDA, CS, DC, RES and BL), only one of them can be
+                connected at a time.
+
+            config EXAMPLE_LCD_ST7735
+                bool "ST7735 (1.8 inch, 128x160 pixels)"
+
+            config EXAMPLE_LCD_ST7789
+                bool "ST7789 (1.54 inch, 240x240 pixels)"
+        endchoice
 
         config EXAMPLE_LCD_SPI_HOST
             int "SPI peripheral"
@@ -214,18 +229,19 @@ menu "Example Configuration"
         config EXAMPLE_LCD_SPI_CLOCK_HZ
             int "SPI clock (Hz)"
             range 100000 80000000
+            default 2700000 if EXAMPLE_LCD_ST7789
             default 10000000
             help
                 The speed of the SPI bus of the display. The controller
                 supports up to 62.5 MHz, but a low speed is safer when the
-                module is connected with long wires. The ST7735 modules are
-                usually driven at 10 MHz, the TFT_eSPI library uses the same
-                speed. The speed can be changed at runtime with the
+                module is connected with long wires. The TFT_eSPI library
+                drives the 128x160 modules at 10 MHz and the 240x240 ones at
+                2.7 MHz. The speed can be changed at runtime with the
                 'lcd_clock' command.
 
         config EXAMPLE_LCD_ROTATION
-            int "Rotation of the screen"
-            range 0 3
+            int "Rotation of the screen (degrees)"
+            range 0 360
             default 0
             help
                 The orientation of the screen: 0 and 180 for the portrait
@@ -233,22 +249,27 @@ menu "Example Configuration"
 
         config EXAMPLE_LCD_WIDTH
             int "Width of the visible area"
-            range 80 132
+            range 80 240
+            default 240 if EXAMPLE_LCD_ST7789
             default 128
             help
                 Number of pixels of the visible area of the module. It is 80
-                for the 0.96 inch modules and 128 for the 1.8 inch ones.
+                for the 0.96 inch modules, 128 for the 1.8 inch ones and 240
+                for the 1.54 inch ones.
 
         config EXAMPLE_LCD_HEIGHT
             int "Height of the visible area"
-            range 80 162
+            range 80 320
+            default 240 if EXAMPLE_LCD_ST7789
             default 160
             help
                 Number of pixels of the visible area of the module. It is 160
-                for the 0.96 inch and for the 1.8 inch modules.
+                for the 0.96 inch and for the 1.8 inch modules, 240 for the
+                1.54 inch ones.
 
         config EXAMPLE_LCD_INVERT_COLORS
             bool "Invert the colors of the display"
+            default y if EXAMPLE_LCD_ST7789
             default n
             help
                 The colors of the screen are inverted by the controller. Most
@@ -257,6 +278,7 @@ menu "Example Configuration"
 
         config EXAMPLE_LCD_BGR_ORDER
             bool "The colors are in the BGR order"
+            default y if EXAMPLE_LCD_ST7789
             default n
             help
                 The order of the colors of the pixels sent to the controller.
@@ -268,13 +290,13 @@ menu "Example Configuration"
             range 0 52
             default 0
             help
-                The controller has 132x162 pixels of memory, the visible area
-                of the module is smaller and offset in it.
+                The controller has more pixels of memory than the visible
+                area of the module, the visible area is offset in it.
 
                 The offset depends on the module:
-                  0/0   128x160 modules of the RobotLCD type (the default),
-                        the ones driven by the TFT_eSPI library with the
-                        ST7735_ROBOTLCD setting
+                  0/0   128x160 modules of the RobotLCD type and 240x240
+                        modules (the defaults), the ones driven by the
+                        TFT_eSPI library
                   2/1   128x160 modules with a green tab
                   26/1  80x160 modules with a green tab
                   24/0  80x160 modules with a red tab

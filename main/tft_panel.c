@@ -1,7 +1,7 @@
 /*
- * ST7735S panel driver
+ * Driver of the TFT panels of the board
  *
- * See st7735.h for the description of the module.
+ * See tft_panel.h for the description of the module.
  */
 #include <string.h>
 
@@ -15,11 +15,11 @@
 #include "freertos/task.h"
 #include "sdkconfig.h"
 
-#include "st7735.h"
+#include "tft_panel.h"
 
-static const char *TAG = "st7735";
+static const char *TAG = "tft_panel";
 
-/* Commands of the controller (ST7735R) */
+/* Commands of the ST7735R controller */
 #define ST7735_CMD_SWRESET  0x01
 #define ST7735_CMD_SLPOUT   0x11
 #define ST7735_CMD_NORON    0x13
@@ -45,6 +45,33 @@ static const char *TAG = "st7735";
 #define ST7735_CMD_GMCTRP1  0xE0
 #define ST7735_CMD_GMCTRN1  0xE1
 
+/* Commands of the ST7789 controller */
+#define ST7789_CMD_SWRESET  0x01
+#define ST7789_CMD_SLPOUT   0x11
+#define ST7789_CMD_NORON    0x13
+#define ST7789_CMD_INVOFF   0x20
+#define ST7789_CMD_INVON    0x21
+#define ST7789_CMD_DISPOFF  0x28
+#define ST7789_CMD_DISPON   0x29
+#define ST7789_CMD_CASET    0x2A
+#define ST7789_CMD_RASET    0x2B
+#define ST7789_CMD_RAMWR    0x2C
+#define ST7789_CMD_MADCTL   0x36
+#define ST7789_CMD_COLMOD   0x3A
+#define ST7789_CMD_RAMCTRL  0xB0
+#define ST7789_CMD_PORCTRL  0xB2
+#define ST7789_CMD_GCTRL    0xB7
+#define ST7789_CMD_VCOMS    0xBB
+#define ST7789_CMD_LCMCTRL  0xC0
+#define ST7789_CMD_VDVVRHEN 0xC2
+#define ST7789_CMD_VRHS     0xC3
+#define ST7789_CMD_VDVSET   0xC4
+#define ST7789_CMD_FRCTR2   0xC6
+#define ST7789_CMD_PWCTRL1  0xD0
+#define ST7789_CMD_PVGAMCTRL 0xE0
+#define ST7789_CMD_NVGAMCTRL 0xE1
+#define ST7789_CMD_DCOADJ   0xB6
+
 /* Bits of the MADCTL command */
 #define ST7735_MADCTL_MY  0x80
 #define ST7735_MADCTL_MX  0x40
@@ -53,19 +80,17 @@ static const char *TAG = "st7735";
 #define ST7735_MADCTL_BGR 0x08
 #define ST7735_MADCTL_MH  0x04
 
+/* Size of the memory of the controllers */
+#define ST7735_MEMORY_WIDTH  132
+#define ST7735_MEMORY_HEIGHT 162
+#define ST7789_MEMORY_WIDTH  240
+#define ST7789_MEMORY_HEIGHT 320
+
 /* Default SPI clock of the panel */
-#define ST7735_DEFAULT_CLOCK_HZ (2 * 1000 * 1000)
+#define TFT_PANEL_DEFAULT_CLOCK_HZ (2 * 1000 * 1000)
 
 /* The SPI controller cannot transfer more than 4092 bytes at once */
 #define SPI_MAX_TRANSFER 4092
-
-/* The colors of the screen are inverted. Most of the ST7735 modules need it,
-   the setting is in the menuconfig (see CONFIG_EXAMPLE_LCD_INVERT_COLORS). */
-#if CONFIG_EXAMPLE_LCD_INVERT_COLORS
-#define ST7735_INVERT_COLORS true
-#else
-#define ST7735_INVERT_COLORS false
-#endif
 
 /* State of the driver */
 static spi_device_handle_t s_spi;
@@ -77,12 +102,15 @@ static int   s_clock_speed_hz;
 static int   s_bl_gpio = -1;
 static bool  s_bl_active_low;
 static bool  s_bl_on;
-static st7735_rotation_t s_rotation;
+static tft_panel_rotation_t s_rotation;
 static uint8_t s_madctl;
 static int   s_col_start;
 static int   s_row_start;
 static int   s_width = 128;
 static int   s_height = 160;
+static tft_panel_controller_t s_controller = TFT_PANEL_ST7735;
+static bool  s_bgr;       /* the colors are in the BGR order */
+static bool  s_invert;    /* the colors of the panel are inverted */
 
 /* The panel is used by the task of LVGL and by the tasks of the console,
    the accesses are serialized with this mutex. */
@@ -106,9 +134,21 @@ static void panel_unlock(void)
 
 /* Whether the screen is in the landscape mode, the axes of the screen are
    then swapped in the memory of the controller. */
-static bool is_landscape(st7735_rotation_t rotation)
+static bool is_landscape(tft_panel_rotation_t rotation)
 {
-    return rotation == ST7735_ROTATION_90 || rotation == ST7735_ROTATION_270;
+    return rotation == TFT_PANEL_ROTATION_90 || rotation == TFT_PANEL_ROTATION_270;
+}
+
+/* The size of the memory of the controller */
+static void memory_size(tft_panel_controller_t controller, int *width, int *height)
+{
+    if (controller == TFT_PANEL_ST7789) {
+        *width = ST7789_MEMORY_WIDTH;
+        *height = ST7789_MEMORY_HEIGHT;
+    } else {
+        *width = ST7735_MEMORY_WIDTH;
+        *height = ST7735_MEMORY_HEIGHT;
+    }
 }
 
 /* A part of a sequence of transfers sent to the controller */
@@ -190,12 +230,12 @@ static void reset_panel(void)
     vTaskDelay(pdMS_TO_TICKS(100));
 }
 
-/* The initialization sequence of the controller.
+/* The initialization sequence of the ST7735R controller.
  *
- * It is the sequence of the ST7735R, the controller of the 1.8 inch modules
- * (128x160 pixels). It is the same sequence as the one of the TFT_eSPI
- * library, which drives the same modules with the same settings. */
-static esp_err_t init_sequence(void)
+ * It is the sequence of the 1.8 inch modules (128x160 pixels), it is the
+ * same sequence as the one of the TFT_eSPI library, which drives the same
+ * modules with the same settings. */
+static esp_err_t init_sequence_st7735(void)
 {
     /* Software reset */
     ESP_RETURN_ON_ERROR(write_command(ST7735_CMD_SWRESET), TAG, "SWRESET failed");
@@ -234,11 +274,11 @@ static esp_err_t init_sequence(void)
                         (const uint8_t[]){0x0E}, 1), TAG, "VMCTR1 failed");
 
     /* The colors are inverted or not, depending on the module */
-#if ST7735_INVERT_COLORS
-    ESP_RETURN_ON_ERROR(write_command(ST7735_CMD_INVON), TAG, "INVON failed");
-#else
-    ESP_RETURN_ON_ERROR(write_command(ST7735_CMD_INVOFF), TAG, "INVOFF failed");
-#endif
+    if (s_invert) {
+        ESP_RETURN_ON_ERROR(write_command(ST7735_CMD_INVON), TAG, "INVON failed");
+    } else {
+        ESP_RETURN_ON_ERROR(write_command(ST7735_CMD_INVOFF), TAG, "INVOFF failed");
+    }
 
     /* The pixel format is 16 bits per pixel */
     ESP_RETURN_ON_ERROR(write_command_with_data(ST7735_CMD_COLMOD,
@@ -267,7 +307,158 @@ static esp_err_t init_sequence(void)
     return ESP_OK;
 }
 
-esp_err_t st7735_init(const st7735_config_t *config)
+/* The initialization sequence of the ST7789 controller.
+ *
+ * It is the sequence of the 1.54 inch modules (240x240 pixels), it is the
+ * same sequence as the one of the TFT_eSPI library (the one of the JLX240
+ * display), which drives the same modules with the same settings. */
+static esp_err_t init_sequence_st7789(bool invert)
+{
+    /* Sleep out */
+    ESP_RETURN_ON_ERROR(write_command(ST7789_CMD_SLPOUT), TAG, "SLPOUT failed");
+    vTaskDelay(pdMS_TO_TICKS(120));
+
+    /* Normal display mode */
+    ESP_RETURN_ON_ERROR(write_command(ST7789_CMD_NORON), TAG, "NORON failed");
+
+    /* The order of the colors, the value is written later, when the
+       orientation of the screen is set */
+    ESP_RETURN_ON_ERROR(write_command_with_data(ST7789_CMD_MADCTL,
+                        (const uint8_t[]){0x00}, 1), TAG, "MADCTL failed");
+
+    /* Display output control adjust */
+    ESP_RETURN_ON_ERROR(write_command_with_data(ST7789_CMD_DCOADJ,
+                        (const uint8_t[]){0x0A, 0x82}, 2), TAG, "DCOADJ failed");
+
+    /* RAM control, the second value is the 5 to 6 bit conversion */
+    ESP_RETURN_ON_ERROR(write_command_with_data(ST7789_CMD_RAMCTRL,
+                        (const uint8_t[]){0x00, 0xE0}, 2), TAG, "RAMCTRL failed");
+
+    /* The pixel format is 16 bits per pixel, the interface is 16 bits wide */
+    ESP_RETURN_ON_ERROR(write_command_with_data(ST7789_CMD_COLMOD,
+                        (const uint8_t[]){0x55}, 1), TAG, "COLMOD failed");
+    vTaskDelay(pdMS_TO_TICKS(10));
+
+    /* Porch control */
+    ESP_RETURN_ON_ERROR(write_command_with_data(ST7789_CMD_PORCTRL,
+                        (const uint8_t[]){0x0C, 0x0C, 0x00, 0x33, 0x33}, 5),
+                        TAG, "PORCTRL failed");
+
+    /* Gate control, the voltages VGH and VGL */
+    ESP_RETURN_ON_ERROR(write_command_with_data(ST7789_CMD_GCTRL,
+                        (const uint8_t[]){0x35}, 1), TAG, "GCTRL failed");
+
+    /* VCOMS setting */
+    ESP_RETURN_ON_ERROR(write_command_with_data(ST7789_CMD_VCOMS,
+                        (const uint8_t[]){0x28}, 1), TAG, "VCOMS failed");
+
+    /* LCM control */
+    ESP_RETURN_ON_ERROR(write_command_with_data(ST7789_CMD_LCMCTRL,
+                        (const uint8_t[]){0x0C}, 1), TAG, "LCMCTRL failed");
+
+    /* VDV and VRH command enable */
+    ESP_RETURN_ON_ERROR(write_command_with_data(ST7789_CMD_VDVVRHEN,
+                        (const uint8_t[]){0x01, 0xFF}, 2), TAG, "VDVVRHEN failed");
+
+    /* The voltage VRHS */
+    ESP_RETURN_ON_ERROR(write_command_with_data(ST7789_CMD_VRHS,
+                        (const uint8_t[]){0x10}, 1), TAG, "VRHS failed");
+
+    /* The voltage VDV */
+    ESP_RETURN_ON_ERROR(write_command_with_data(ST7789_CMD_VDVSET,
+                        (const uint8_t[]){0x20}, 1), TAG, "VDVSET failed");
+
+    /* Frame rate control 2 */
+    ESP_RETURN_ON_ERROR(write_command_with_data(ST7789_CMD_FRCTR2,
+                        (const uint8_t[]){0x0F}, 1), TAG, "FRCTR2 failed");
+
+    /* Power control 1 */
+    ESP_RETURN_ON_ERROR(write_command_with_data(ST7789_CMD_PWCTRL1,
+                        (const uint8_t[]){0xA4, 0xA1}, 2), TAG, "PWCTRL1 failed");
+
+    /* The gamma curves. The reference sends 14 of the 16 bytes of the
+       registers, the two last ones keep their reset value. */
+    ESP_RETURN_ON_ERROR(write_command_with_data(ST7789_CMD_PVGAMCTRL,
+                        (const uint8_t[]){
+                            0xD0, 0x00, 0x02, 0x07, 0x0A, 0x28, 0x32, 0x44,
+                            0x42, 0x06, 0x0E, 0x12, 0x14, 0x17}, 14),
+                        TAG, "PVGAMCTRL failed");
+    ESP_RETURN_ON_ERROR(write_command_with_data(ST7789_CMD_NVGAMCTRL,
+                        (const uint8_t[]){
+                            0xD0, 0x00, 0x02, 0x07, 0x0A, 0x28, 0x31, 0x54,
+                            0x47, 0x0E, 0x1C, 0x17, 0x1B, 0x1E}, 14),
+                        TAG, "NVGAMCTRL failed");
+
+    /* The colors of the panel are inverted */
+    if (invert) {
+        ESP_RETURN_ON_ERROR(write_command(ST7789_CMD_INVON), TAG, "INVON failed");
+    } else {
+        ESP_RETURN_ON_ERROR(write_command(ST7789_CMD_INVOFF), TAG, "INVOFF failed");
+    }
+
+    /* The whole memory of the controller is selected, the visible area is
+       set later, when the orientation of the screen is set */
+    ESP_RETURN_ON_ERROR(write_command_with_data(ST7789_CMD_CASET,
+                        (const uint8_t[]){0x00, 0x00, 0x00, 0xEF}, 4), TAG, "CASET failed");
+    ESP_RETURN_ON_ERROR(write_command_with_data(ST7789_CMD_RASET,
+                        (const uint8_t[]){0x00, 0x00, 0x01, 0x3F}, 4), TAG, "RASET failed");
+
+    vTaskDelay(pdMS_TO_TICKS(120));
+
+    /* The screen is switched on */
+    ESP_RETURN_ON_ERROR(write_command(ST7789_CMD_DISPON), TAG, "DISPON failed");
+    vTaskDelay(pdMS_TO_TICKS(120));
+
+    return ESP_OK;
+}
+
+/* The value of the MADCTL register for an orientation.
+ *
+ * The values are the ones of the TFT_eSPI library, they depend on the
+ * controller. */
+static uint8_t madctl_for_rotation(tft_panel_controller_t controller,
+                                   tft_panel_rotation_t rotation)
+{
+    uint8_t madctl = 0;
+
+    if (controller == TFT_PANEL_ST7789) {
+        switch (rotation) {
+        case TFT_PANEL_ROTATION_0:
+            break;
+        case TFT_PANEL_ROTATION_90:
+            madctl |= ST7735_MADCTL_MX | ST7735_MADCTL_MV;
+            break;
+        case TFT_PANEL_ROTATION_180:
+            madctl |= ST7735_MADCTL_MX | ST7735_MADCTL_MY;
+            break;
+        case TFT_PANEL_ROTATION_270:
+            madctl |= ST7735_MADCTL_MV | ST7735_MADCTL_MY;
+            break;
+        default:
+            break;
+        }
+    } else {
+        switch (rotation) {
+        case TFT_PANEL_ROTATION_0:
+            madctl |= ST7735_MADCTL_MX | ST7735_MADCTL_MY;
+            break;
+        case TFT_PANEL_ROTATION_90:
+            madctl |= ST7735_MADCTL_MY | ST7735_MADCTL_MV;
+            break;
+        case TFT_PANEL_ROTATION_180:
+            break;
+        case TFT_PANEL_ROTATION_270:
+            madctl |= ST7735_MADCTL_MX | ST7735_MADCTL_MV;
+            break;
+        default:
+            break;
+        }
+    }
+
+    return madctl;
+}
+
+esp_err_t tft_panel_init(const tft_panel_config_t *config)
 {
     ESP_RETURN_ON_FALSE(config != NULL, ESP_ERR_INVALID_ARG, TAG, "invalid argument");
 
@@ -277,6 +468,7 @@ esp_err_t st7735_init(const st7735_config_t *config)
                             "the mutex of the panel could not be created");
     }
 
+    s_controller = config->controller;
     s_cs_gpio = config->cs_gpio;
     s_dc_gpio = config->dc_gpio;
     s_rst_gpio = config->rst_gpio;
@@ -284,6 +476,8 @@ esp_err_t st7735_init(const st7735_config_t *config)
     s_height = config->height > 0 ? config->height : 160;
     s_col_start = config->col_start;
     s_row_start = config->row_start;
+    s_bgr = config->bgr;
+    s_invert = config->invert;
     s_bl_gpio = config->bl_gpio;
     s_bl_active_low = config->bl_active_low;
     s_bl_on = false;
@@ -309,7 +503,7 @@ esp_err_t st7735_init(const st7735_config_t *config)
             .intr_type = GPIO_INTR_DISABLE,
         };
         ESP_RETURN_ON_ERROR(gpio_config(&bl_config), TAG, "gpio_config() of the backlight failed");
-        st7735_set_backlight(false);
+        tft_panel_set_backlight(false);
     }
 
     /* The SPI bus. The maximum size of a transfer is the size of a band of
@@ -327,7 +521,7 @@ esp_err_t st7735_init(const st7735_config_t *config)
 
     const spi_device_interface_config_t device_config = {
         .clock_speed_hz = config->clock_speed_hz > 0 ? config->clock_speed_hz
-                                                     : ST7735_DEFAULT_CLOCK_HZ,
+                                                     : TFT_PANEL_DEFAULT_CLOCK_HZ,
         .mode = 0,               /* the controller samples the clock on the rising edge */
         .spics_io_num = config->cs_gpio,
         .queue_size = 1,
@@ -338,16 +532,26 @@ esp_err_t st7735_init(const st7735_config_t *config)
                         TAG, "spi_bus_add_device() failed");
 
     reset_panel();
-    ESP_RETURN_ON_ERROR(init_sequence(), TAG, "the initialization sequence failed");
 
-    ESP_RETURN_ON_ERROR(st7735_set_rotation(config->rotation), TAG, "st7735_set_rotation() failed");
+    /* The initialization sequence depends on the controller */
+    esp_err_t err;
+    if (s_controller == TFT_PANEL_ST7789) {
+        err = init_sequence_st7789(s_invert);
+    } else {
+        err = init_sequence_st7735();
+    }
+    ESP_RETURN_ON_ERROR(err, TAG, "the initialization sequence failed");
 
-    ESP_LOGI(TAG, "ST7735 %dx%d ready (offset %d/%d), SPI%d, %d Hz, rotation %d",
+    ESP_RETURN_ON_ERROR(tft_panel_set_rotation(config->rotation), TAG,
+                        "tft_panel_set_rotation() failed");
+
+    ESP_LOGI(TAG, "%s %dx%d ready (offset %d/%d), SPI%d, %d Hz, rotation %d",
+             s_controller == TFT_PANEL_ST7789 ? "ST7789" : "ST7735",
              s_width, s_height, s_col_start, s_row_start, config->spi_host + 1,
-             config->clock_speed_hz > 0 ? config->clock_speed_hz : ST7735_DEFAULT_CLOCK_HZ,
+             config->clock_speed_hz > 0 ? config->clock_speed_hz : TFT_PANEL_DEFAULT_CLOCK_HZ,
              (int)config->rotation);
 
-    st7735_set_backlight(true);
+    tft_panel_set_backlight(true);
     return ESP_OK;
 }
 
@@ -409,7 +613,7 @@ static esp_err_t draw_area(int x, int y, int width, int height, const void *data
     return write_window(s_col_start + x1, s_row_start + y1, win_width, win_height, data);
 }
 
-esp_err_t st7735_draw_pixels(int x, int y, int width, int height, const void *data)
+esp_err_t tft_panel_draw_pixels(int x, int y, int width, int height, const void *data)
 {
     if (data == NULL || width <= 0 || height <= 0) {
         return ESP_ERR_INVALID_ARG;
@@ -422,7 +626,7 @@ esp_err_t st7735_draw_pixels(int x, int y, int width, int height, const void *da
     return err;
 }
 
-esp_err_t st7735_fill_raw(uint16_t color)
+esp_err_t tft_panel_fill_raw(uint16_t color)
 {
     /* The whole memory of the controller is filled, whatever the offset of
        the visible area is, the screen shows something. It is used to check
@@ -430,8 +634,9 @@ esp_err_t st7735_fill_raw(uint16_t color)
 
        The memory is filled band by band, the SPI controller cannot transfer
        more than 4092 bytes at once. */
-    const int width = ST7735_MEMORY_WIDTH;
-    const int height = ST7735_MEMORY_HEIGHT;
+    int width = 0;
+    int height = 0;
+    memory_size(s_controller, &width, &height);
     const int band_height = SPI_MAX_TRANSFER / (width * 2);
 
     const size_t band_pixels = (size_t)width * band_height;
@@ -459,30 +664,14 @@ esp_err_t st7735_fill_raw(uint16_t color)
     return err;
 }
 
-esp_err_t st7735_set_rotation(st7735_rotation_t rotation)
+esp_err_t tft_panel_set_rotation(tft_panel_rotation_t rotation)
 {
-    /* The color order of the module, most of them are in the BGR order */
-    uint8_t madctl = 0;
-#if CONFIG_EXAMPLE_LCD_BGR_ORDER
-    madctl |= ST7735_MADCTL_BGR;
-#endif
+    /* The orientation of the screen, it depends on the controller */
+    uint8_t madctl = madctl_for_rotation(s_controller, rotation);
 
-    /* The orientation of the screen. The values are the ones of the TFT_eSPI
-       library for the ST7735. */
-    switch (rotation) {
-    case ST7735_ROTATION_0:
-        madctl |= ST7735_MADCTL_MX | ST7735_MADCTL_MY;
-        break;
-    case ST7735_ROTATION_90:
-        madctl |= ST7735_MADCTL_MY | ST7735_MADCTL_MV;
-        break;
-    case ST7735_ROTATION_180:
-        break;
-    case ST7735_ROTATION_270:
-        madctl |= ST7735_MADCTL_MX | ST7735_MADCTL_MV;
-        break;
-    default:
-        return ESP_ERR_INVALID_ARG;
+    /* The order of the colors, most of the modules are in the BGR order */
+    if (s_bgr) {
+        madctl |= ST7735_MADCTL_BGR;
     }
 
     panel_lock();
@@ -495,12 +684,12 @@ esp_err_t st7735_set_rotation(st7735_rotation_t rotation)
     return ESP_OK;
 }
 
-st7735_rotation_t st7735_get_rotation(void)
+tft_panel_rotation_t tft_panel_get_rotation(void)
 {
     return s_rotation;
 }
 
-void st7735_get_size(int *width, int *height)
+void tft_panel_get_size(int *width, int *height)
 {
     const bool landscape = is_landscape(s_rotation);
     if (width != NULL) {
@@ -511,7 +700,7 @@ void st7735_get_size(int *width, int *height)
     }
 }
 
-void st7735_set_backlight(bool on)
+void tft_panel_set_backlight(bool on)
 {
     if (s_bl_gpio < 0) {
         return;
@@ -525,12 +714,12 @@ void st7735_set_backlight(bool on)
     }
 }
 
-bool st7735_backlight_is_on(void)
+bool tft_panel_backlight_is_on(void)
 {
     return s_bl_on;
 }
 
-esp_err_t st7735_set_madctl(uint8_t value)
+esp_err_t tft_panel_set_madctl(uint8_t value)
 {
     panel_lock();
     const esp_err_t err = write_command_with_data(ST7735_CMD_MADCTL, &value, 1);
@@ -542,14 +731,18 @@ esp_err_t st7735_set_madctl(uint8_t value)
     return ESP_OK;
 }
 
-uint8_t st7735_get_madctl(void)
+uint8_t tft_panel_get_madctl(void)
 {
     return s_madctl;
 }
 
-esp_err_t st7735_set_offset(int col, int row)
+esp_err_t tft_panel_set_offset(int col, int row)
 {
-    if (col < 0 || col > 132 || row < 0 || row > 162) {
+    int mem_width = 0;
+    int mem_height = 0;
+    memory_size(s_controller, &mem_width, &mem_height);
+
+    if (col < 0 || col > mem_width || row < 0 || row > mem_height) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -559,7 +752,7 @@ esp_err_t st7735_set_offset(int col, int row)
     return ESP_OK;
 }
 
-void st7735_get_offset(int *col, int *row)
+void tft_panel_get_offset(int *col, int *row)
 {
     if (col != NULL) {
         *col = s_col_start;
@@ -569,11 +762,11 @@ void st7735_get_offset(int *col, int *row)
     }
 }
 
-esp_err_t st7735_fill(uint16_t color)
+esp_err_t tft_panel_fill(uint16_t color)
 {
     int width = 0;
     int height = 0;
-    st7735_get_size(&width, &height);
+    tft_panel_get_size(&width, &height);
 
     /* The screen is filled band by band, the SPI controller cannot transfer
        more than 4092 bytes at once. */
@@ -598,7 +791,7 @@ esp_err_t st7735_fill(uint16_t color)
     esp_err_t err = ESP_OK;
     for (int y = 0; y < height; y += band_height) {
         const int lines = (y + band_height <= height) ? band_height : height - y;
-        err = st7735_draw_pixels(0, y, width, lines, buffer);
+        err = tft_panel_draw_pixels(0, y, width, lines, buffer);
         if (err != ESP_OK) {
             break;
         }
@@ -608,39 +801,39 @@ esp_err_t st7735_fill(uint16_t color)
     return err;
 }
 
-esp_err_t st7735_draw_map_pattern(void)
+esp_err_t tft_panel_draw_map_pattern(void)
 {
     int width = 0;
     int height = 0;
-    st7735_get_size(&width, &height);
+    tft_panel_get_size(&width, &height);
 
     /* A white background */
-    ESP_RETURN_ON_ERROR(st7735_fill(0xFFFF), TAG, "st7735_fill() failed");
+    ESP_RETURN_ON_ERROR(tft_panel_fill(0xFFFF), TAG, "tft_panel_fill() failed");
 
     /* A red block in the top left corner */
     const uint8_t red[] = { 0xF8, 0x00 };
     for (int y = 0; y < 16; y++) {
-        ESP_RETURN_ON_ERROR(st7735_draw_pixels(0, y, 16, 1, red), TAG, "red block failed");
+        ESP_RETURN_ON_ERROR(tft_panel_draw_pixels(0, y, 16, 1, red), TAG, "red block failed");
     }
 
     /* A blue block in the bottom right corner */
     const uint8_t blue[] = { 0x00, 0x1F };
     for (int y = 0; y < 16; y++) {
-        ESP_RETURN_ON_ERROR(st7735_draw_pixels(width - 16, height - 16 + y, 16, 1, blue),
+        ESP_RETURN_ON_ERROR(tft_panel_draw_pixels(width - 16, height - 16 + y, 16, 1, blue),
                             TAG, "blue block failed");
     }
 
     /* A green line in the middle of the height */
     const uint8_t green[] = { 0x07, 0xE0 };
     for (int x = 0; x < width; x++) {
-        ESP_RETURN_ON_ERROR(st7735_draw_pixels(x, height / 2, 1, 1, green),
+        ESP_RETURN_ON_ERROR(tft_panel_draw_pixels(x, height / 2, 1, 1, green),
                             TAG, "green line failed");
     }
 
     /* An orange line in the middle of the width */
     const uint8_t orange[] = { 0xFF, 0xE0 };
     for (int y = 0; y < height; y++) {
-        ESP_RETURN_ON_ERROR(st7735_draw_pixels(width / 2, y, 1, 1, orange),
+        ESP_RETURN_ON_ERROR(tft_panel_draw_pixels(width / 2, y, 1, 1, orange),
                             TAG, "orange line failed");
     }
 
@@ -648,24 +841,24 @@ esp_err_t st7735_draw_map_pattern(void)
     return ESP_OK;
 }
 
-esp_err_t st7735_draw_test_pattern(void)
+esp_err_t tft_panel_draw_test_pattern(void)
 {
     int width = 0;
     int height = 0;
-    st7735_get_size(&width, &height);
+    tft_panel_get_size(&width, &height);
 
     /* A black background */
-    ESP_RETURN_ON_ERROR(st7735_fill(0x0000), TAG, "st7735_fill() failed");
+    ESP_RETURN_ON_ERROR(tft_panel_fill(0x0000), TAG, "tft_panel_fill() failed");
 
     /* A white border around the visible area */
     const uint16_t border = 0xFFFF;
     for (int x = 0; x < width; x++) {
-        ESP_RETURN_ON_ERROR(st7735_draw_pixels(x, 0, 1, 1, &border), TAG, "border failed");
-        ESP_RETURN_ON_ERROR(st7735_draw_pixels(x, height - 1, 1, 1, &border), TAG, "border failed");
+        ESP_RETURN_ON_ERROR(tft_panel_draw_pixels(x, 0, 1, 1, &border), TAG, "border failed");
+        ESP_RETURN_ON_ERROR(tft_panel_draw_pixels(x, height - 1, 1, 1, &border), TAG, "border failed");
     }
     for (int y = 0; y < height; y++) {
-        ESP_RETURN_ON_ERROR(st7735_draw_pixels(0, y, 1, 1, &border), TAG, "border failed");
-        ESP_RETURN_ON_ERROR(st7735_draw_pixels(width - 1, y, 1, 1, &border), TAG, "border failed");
+        ESP_RETURN_ON_ERROR(tft_panel_draw_pixels(0, y, 1, 1, &border), TAG, "border failed");
+        ESP_RETURN_ON_ERROR(tft_panel_draw_pixels(width - 1, y, 1, 1, &border), TAG, "border failed");
     }
 
     /* Four colored blocks, one in each corner */
@@ -683,7 +876,7 @@ esp_err_t st7735_draw_test_pattern(void)
         const uint8_t color[] = { (uint8_t)(blocks[i].color >> 8),
                                   (uint8_t)(blocks[i].color & 0xFF) };
         for (int row = 0; row < 10; row++) {
-            ESP_RETURN_ON_ERROR(st7735_draw_pixels(blocks[i].x, blocks[i].y + row, 10, 1, color),
+            ESP_RETURN_ON_ERROR(tft_panel_draw_pixels(blocks[i].x, blocks[i].y + row, 10, 1, color),
                                 TAG, "block failed");
         }
     }
@@ -692,7 +885,7 @@ esp_err_t st7735_draw_test_pattern(void)
     return ESP_OK;
 }
 
-esp_err_t st7735_set_clock(int clock_speed_hz)
+esp_err_t tft_panel_set_clock(int clock_speed_hz)
 {
     if (s_spi == NULL) {
         return ESP_ERR_INVALID_STATE;
@@ -722,7 +915,7 @@ esp_err_t st7735_set_clock(int clock_speed_hz)
     return ESP_OK;
 }
 
-int st7735_get_clock(void)
+int tft_panel_get_clock(void)
 {
     return s_clock_speed_hz;
 }

@@ -25,10 +25,12 @@
    against the other tasks of the application */
 #define LV_USE_OS LV_OS_FREERTOS
 
-/* Fonts: the test screen of the 128x160 screen needs a readable text */
+/* Fonts: the test screen of the 128x160 and of the 240x240 screens needs a
+   readable text */
 #define LV_FONT_MONTSERRAT_10 1
 #define LV_FONT_MONTSERRAT_12 1
 #define LV_FONT_MONTSERRAT_14 1
+#define LV_FONT_MONTSERRAT_16 1
 #define LV_FONT_DEFAULT &lv_font_montserrat_14
 
 /* The widgets that are not used by the dashboard are removed, they take a
