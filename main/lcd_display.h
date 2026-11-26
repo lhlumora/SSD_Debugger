@@ -122,6 +122,14 @@ esp_err_t lcd_display_set_brightness(int percent);
  */
 int lcd_display_get_brightness(void);
 
+/**
+ * @brief  Whether the display is rendered
+ *
+ * The rendering is suspended while the backlight is off, it saves the CPU
+ * and the power.
+ */
+bool lcd_display_is_rendering(void);
+
 #ifdef __cplusplus
 }
 #endif

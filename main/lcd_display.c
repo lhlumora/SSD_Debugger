@@ -33,10 +33,26 @@ static const char *TAG = "lcd_display";
 /* Priority of the LVGL task */
 #define LCD_TASK_PRIORITY 4
 
+/* Interval between two checks of the state of the backlight while the
+   rendering is suspended */
+#define LCD_SUSPEND_POLL_MS 50
+
 static lv_display_t   *s_display;
 static void            *s_buffer;
 static TaskHandle_t     s_task;
 static bool             s_ready;
+
+/* Whether the rendering is suspended because the backlight is off */
+static bool             s_suspended;
+
+/* Wake up the task of LVGL, it checks if the rendering has to be started or
+   stopped when the state of the backlight changes */
+static void wake_up_lvgl_task(void)
+{
+    if (s_task != NULL) {
+        xTaskNotifyGive(s_task);
+    }
+}
 
 /* The number of the frames drawn on the screen since the last call to
    lcd_display_take_frame_count() */
@@ -116,6 +132,29 @@ static void flush_callback(lv_display_t *display, const lv_area_t *area, uint8_t
 static void lvgl_task(void *arg)
 {
     while (true) {
+        /* The rendering is suspended while the backlight is off: the screen
+           is not visible, there is no point in drawing it. It saves the CPU
+           and the power.
+
+           The screen is drawn again when the backlight is switched on. */
+        if (tft_panel_get_brightness() <= 0) {
+            if (!s_suspended) {
+                s_suspended = true;
+                ESP_LOGI(TAG, "The rendering is suspended (the backlight is off)");
+            }
+            /* Wait for the backlight to be switched on, the task is woken up
+               by lcd_display_set_brightness() */
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(LCD_SUSPEND_POLL_MS));
+            continue;
+        }
+
+        if (s_suspended) {
+            s_suspended = false;
+            ESP_LOGI(TAG, "The rendering is resumed");
+            /* The whole screen is drawn again */
+            lv_obj_invalidate(lv_screen_active());
+        }
+
         uint32_t delay = lv_timer_handler();
         if (delay < 5) {
             delay = 5;
@@ -337,6 +376,9 @@ void lcd_display_refresh(void)
 void lcd_display_set_backlight(bool on)
 {
     tft_panel_set_backlight(on);
+
+    /* The task of LVGL is woken up, it starts or stops the rendering */
+    wake_up_lvgl_task();
 }
 
 bool lcd_display_backlight_is_on(void)
@@ -346,10 +388,20 @@ bool lcd_display_backlight_is_on(void)
 
 esp_err_t lcd_display_set_brightness(int percent)
 {
-    return tft_panel_set_brightness(percent);
+    const esp_err_t err = tft_panel_set_brightness(percent);
+
+    /* The task of LVGL is woken up, it starts or stops the rendering */
+    wake_up_lvgl_task();
+
+    return err;
 }
 
 int lcd_display_get_brightness(void)
 {
     return tft_panel_get_brightness();
+}
+
+bool lcd_display_is_rendering(void)
+{
+    return !s_suspended;
 }

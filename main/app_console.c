@@ -857,6 +857,8 @@ static int cmd_lcd_info(int argc, char **argv)
            controller, width, height, lcd_display_get_rotation(),
            lcd_display_backlight_is_on() ? "on" : "off",
            lcd_display_get_brightness());
+    printf("Rendering: %s\n",
+           lcd_display_is_rendering() ? "running" : "suspended (the backlight is off)");
     printf("SPI: SCLK=%d SDA=%d CS=%d DC=%d RES=%d BL=%d, %d Hz\n",
            CONFIG_EXAMPLE_LCD_SCLK_GPIO, CONFIG_EXAMPLE_LCD_MOSI_GPIO,
            CONFIG_EXAMPLE_LCD_CS_GPIO, CONFIG_EXAMPLE_LCD_DC_GPIO,

@@ -508,7 +508,9 @@ esp_err_t tft_panel_init(const tft_panel_config_t *config)
     s_bl_gpio = config->bl_gpio;
     s_bl_active_low = config->bl_active_low;
     s_bl_on = false;
-    s_brightness = 0;
+    /* The brightness is 100% when the backlight is not connected to a GPIO:
+       the screen is always shown and it is always rendered */
+    s_brightness = (config->bl_gpio >= 0) ? 0 : 100;
     s_bl_pwm = false;
 
     /* The mode of the SPI bus. The TFT_eSPI library uses the mode 3 for the
