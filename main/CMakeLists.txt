@@ -12,6 +12,7 @@ idf_component_register(SRCS "sys_stats.c" "led_status.c" "app_main.c"
                              esp_netif
                              esp_event
                              esp_driver_gpio
+                             esp_driver_ledc
                              esp_driver_spi
                              esp_driver_uart
                              esp_system

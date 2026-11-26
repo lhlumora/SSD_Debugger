@@ -760,21 +760,49 @@ static int cmd_lcd_backlight(int argc, char **argv)
     }
 
     if (argc < 2) {
-        printf("The backlight is %s.\n",
-               lcd_display_backlight_is_on() ? "on" : "off");
+        printf("The backlight is %s, its brightness is %d%%.\n",
+               lcd_display_backlight_is_on() ? "on" : "off",
+               lcd_display_get_brightness());
         return 0;
     }
 
     if (strcmp(argv[1], "on") == 0) {
         lcd_display_set_backlight(true);
-    } else if (strcmp(argv[1], "off") == 0) {
+        printf("The backlight is %s, its brightness is %d%%.\n",
+               lcd_display_backlight_is_on() ? "on" : "off",
+               lcd_display_get_brightness());
+        return 0;
+    }
+
+    if (strcmp(argv[1], "off") == 0) {
         lcd_display_set_backlight(false);
-    } else {
-        printf("Usage: lcd_backlight [on|off]\n");
+        printf("The backlight is %s, its brightness is %d%%.\n",
+               lcd_display_backlight_is_on() ? "on" : "off",
+               lcd_display_get_brightness());
+        return 0;
+    }
+
+    /* The brightness of the backlight, in percent */
+    char *end = NULL;
+    const long percent = strtol(argv[1], &end, 10);
+    if (end == argv[1] || *end != '\0' || percent < 0 || percent > 100) {
+        printf("Usage: lcd_backlight [on|off|<0-100>]\n");
         return 1;
     }
 
-    printf("The backlight is %s.\n", lcd_display_backlight_is_on() ? "on" : "off");
+    const esp_err_t err = lcd_display_set_brightness((int)percent);
+    if (err != ESP_OK) {
+        if (CONFIG_EXAMPLE_LCD_BL_GPIO < 0) {
+            printf("The backlight is not connected to a GPIO.\n");
+        } else {
+            printf("Failed to set the brightness: %s\n", esp_err_to_name(err));
+        }
+        return 1;
+    }
+
+    printf("The backlight is %s, its brightness is %d%%.\n",
+           lcd_display_backlight_is_on() ? "on" : "off",
+           lcd_display_get_brightness());
     return 0;
 }
 
@@ -825,9 +853,10 @@ static int cmd_lcd_info(int argc, char **argv)
     const char *controller = "ST7735";
 #endif
 
-    printf("Display: %s %dx%d, rotation %d, backlight %s\n",
+    printf("Display: %s %dx%d, rotation %d, backlight %s (%d%%)\n",
            controller, width, height, lcd_display_get_rotation(),
-           lcd_display_backlight_is_on() ? "on" : "off");
+           lcd_display_backlight_is_on() ? "on" : "off",
+           lcd_display_get_brightness());
     printf("SPI: SCLK=%d SDA=%d CS=%d DC=%d RES=%d BL=%d, %d Hz\n",
            CONFIG_EXAMPLE_LCD_SCLK_GPIO, CONFIG_EXAMPLE_LCD_MOSI_GPIO,
            CONFIG_EXAMPLE_LCD_CS_GPIO, CONFIG_EXAMPLE_LCD_DC_GPIO,
@@ -1142,11 +1171,14 @@ static const help_cmd_t s_help_display[] = {
         .summary = "Show the settings of the display.",
     },
     {
-        .syntax  = "lcd_backlight [on|off]",
-        .summary = "Switch the backlight of the display on or off.",
-        .args    = "  <on|off>         State of the backlight. Without argument the\n"
-                   "                 current state is shown",
-        .example = "  lcd_backlight off",
+        .syntax  = "lcd_backlight [on|off|<percent>]",
+        .summary = "Switch the backlight of the display on or off, set its "
+                   "brightness.",
+        .args    = "  <on|off|percent> State of the backlight, or its brightness\n"
+                   "                 in percent (from 0 to 100). Without argument\n"
+                   "                 the current state is shown",
+        .example = "  lcd_backlight off\n"
+                   "  lcd_backlight 50",
     },
     {
         .syntax  = "lcd_rotate [degrees]",
@@ -1447,8 +1479,8 @@ static void register_console_commands(void)
 #if CONFIG_EXAMPLE_LCD_ENABLE
     const esp_console_cmd_t lcd_backlight_cmd = {
         .command = "lcd_backlight",
-        .help = "Switch the backlight of the display on or off",
-        .hint = "[on|off]",
+        .help = "Switch the backlight of the display on or off, set its brightness",
+        .hint = "[on|off|<0-100>]",
         .func = &cmd_lcd_backlight,
     };
     ESP_ERROR_CHECK(esp_console_cmd_register(&lcd_backlight_cmd));

@@ -191,7 +191,7 @@ The screen can be controlled from the console:
 | Command | Description |
 | ------- | ----------- |
 | `lcd_info` | Show the settings of the display |
-| `lcd_backlight [on\|off]` | Switch the backlight on or off |
+| `lcd_backlight [on\|off\|<0-100>]` | Switch the backlight on or off, set its brightness |
 | `lcd_rotate [degrees]` | Rotate the screen (0, 90, 180 or 270) |
 | `lcd_refresh` | Draw the test screen again over the whole screen |
 | `lcd_test [raw\|map\|pattern\|color]` | Draw a test pattern on the screen |
@@ -199,10 +199,28 @@ The screen can be controlled from the console:
 | `lcd_madctl [value]` | Show or set the MADCTL register of the controller |
 | `lcd_clock [hz]` | Show or set the speed of the SPI bus |
 
+### Brightness of the backlight
+
+The brightness of the backlight is driven by a PWM signal (the LEDC
+peripheral), it is set with a percentage of the maximum brightness:
+
+```
+esp32s3> lcd_backlight 50     # the backlight is at half of its brightness
+esp32s3> lcd_backlight         # show the current state and the brightness
+The backlight is on, its brightness is 50%.
+esp32s3> lcd_backlight off     # the backlight is off
+```
+
+The frequency of the PWM is set in the menuconfig (Example Configuration
+Options -> Display -> "Frequency of the PWM of the backlight"), 5 kHz by
+default. The polarity of the backlight (lit when the pin is high or low) is
+set in the same menu.
+
 Notes:
 
 * The screen uses the SPI2 peripheral, the other peripherals of the board
   (the three UARTs) are not affected.
+* The PWM of the backlight uses the LEDC channel 0 and the timer 0.
 * The chip select line of the panel stays low during the whole exchange of a
   command and its parameters, the controller resets the parser of the
   commands when the line goes high.

@@ -152,6 +152,7 @@ esp_err_t lcd_display_init(void)
 #else
         .bl_active_low = false,
 #endif
+        .bl_pwm_freq_hz = CONFIG_EXAMPLE_LCD_BL_PWM_FREQ_HZ,
         .clock_speed_hz = CONFIG_EXAMPLE_LCD_SPI_CLOCK_HZ,
         .rotation = rotation_from_degrees(CONFIG_EXAMPLE_LCD_ROTATION),
         .width = CONFIG_EXAMPLE_LCD_WIDTH,
@@ -341,4 +342,14 @@ void lcd_display_set_backlight(bool on)
 bool lcd_display_backlight_is_on(void)
 {
     return tft_panel_backlight_is_on();
+}
+
+esp_err_t lcd_display_set_brightness(int percent)
+{
+    return tft_panel_set_brightness(percent);
+}
+
+int lcd_display_get_brightness(void)
+{
+    return tft_panel_get_brightness();
 }

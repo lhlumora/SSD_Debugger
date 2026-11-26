@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "driver/gpio.h"
+#include "driver/ledc.h"
 #include "driver/spi_master.h"
 #include "esp_check.h"
 #include "esp_heap_caps.h"
@@ -89,6 +90,18 @@ static const char *TAG = "tft_panel";
 /* Default SPI clock of the panel */
 #define TFT_PANEL_DEFAULT_CLOCK_HZ (2 * 1000 * 1000)
 
+/* The PWM that drives the brightness of the backlight */
+#define BACKLIGHT_LEDC_MODE    LEDC_LOW_SPEED_MODE
+#define BACKLIGHT_LEDC_TIMER   LEDC_TIMER_0
+#define BACKLIGHT_LEDC_CHANNEL LEDC_CHANNEL_0
+#define BACKLIGHT_LEDC_RES     LEDC_TIMER_10_BIT
+
+/* The maximum duty of the PWM of the backlight */
+#define BACKLIGHT_PWM_MAX ((1 << BACKLIGHT_LEDC_RES) - 1)
+
+/* The default frequency of the PWM of the backlight */
+#define BACKLIGHT_PWM_DEFAULT_FREQ_HZ 5000
+
 /* The SPI controller cannot transfer more than 4092 bytes at once */
 #define SPI_MAX_TRANSFER 4092
 
@@ -102,6 +115,8 @@ static int   s_clock_speed_hz;
 static int   s_bl_gpio = -1;
 static bool  s_bl_active_low;
 static bool  s_bl_on;
+static bool  s_bl_pwm;          /* the brightness is driven by a PWM */
+static int   s_brightness = 100; /* the brightness of the backlight, in percent */
 static tft_panel_rotation_t s_rotation;
 static uint8_t s_madctl;
 static int   s_col_start;
@@ -493,6 +508,8 @@ esp_err_t tft_panel_init(const tft_panel_config_t *config)
     s_bl_gpio = config->bl_gpio;
     s_bl_active_low = config->bl_active_low;
     s_bl_on = false;
+    s_brightness = 0;
+    s_bl_pwm = false;
 
     /* The mode of the SPI bus. The TFT_eSPI library uses the mode 3 for the
        ST7789 (some of these modules do not work with the mode 0, the clock
@@ -511,17 +528,57 @@ esp_err_t tft_panel_init(const tft_panel_config_t *config)
     };
     ESP_RETURN_ON_ERROR(gpio_config(&output_config), TAG, "gpio_config() failed");
 
-    /* The backlight is switched off while the controller is initialized */
+    /* The brightness of the backlight is driven by a PWM signal.
+     *
+     * The LEDC channel takes the control of the pin, the pin must not be
+     * configured as a plain output before: the two drivers would reserve it
+     * and the LEDC would complain that the pin is not usable. */
     if (s_bl_gpio >= 0) {
-        const gpio_config_t bl_config = {
-            .pin_bit_mask = 1ULL << s_bl_gpio,
-            .mode = GPIO_MODE_OUTPUT,
-            .pull_up_en = GPIO_PULLUP_DISABLE,
-            .pull_down_en = GPIO_PULLDOWN_DISABLE,
-            .intr_type = GPIO_INTR_DISABLE,
+        const ledc_timer_config_t timer_config = {
+            .speed_mode = BACKLIGHT_LEDC_MODE,
+            .duty_resolution = BACKLIGHT_LEDC_RES,
+            .timer_num = BACKLIGHT_LEDC_TIMER,
+            .freq_hz = config->bl_pwm_freq_hz > 0 ? config->bl_pwm_freq_hz
+                                                  : BACKLIGHT_PWM_DEFAULT_FREQ_HZ,
+            .clk_cfg = LEDC_USE_APB_CLK,
         };
-        ESP_RETURN_ON_ERROR(gpio_config(&bl_config), TAG, "gpio_config() of the backlight failed");
-        tft_panel_set_backlight(false);
+        esp_err_t err = ledc_timer_config(&timer_config);
+
+        if (err == ESP_OK) {
+            const ledc_channel_config_t channel_config = {
+                .gpio_num = s_bl_gpio,
+                .speed_mode = BACKLIGHT_LEDC_MODE,
+                .channel = BACKLIGHT_LEDC_CHANNEL,
+                .timer_sel = BACKLIGHT_LEDC_TIMER,
+                /* The backlight is off until the controller is ready */
+                .duty = s_bl_active_low ? BACKLIGHT_PWM_MAX : 0,
+                .hpoint = 0,
+                .sleep_mode = LEDC_SLEEP_MODE_NO_ALIVE_NO_PD,
+            };
+            err = ledc_channel_config(&channel_config);
+        }
+
+        if (err == ESP_OK) {
+            s_bl_pwm = true;
+            /* The backlight is off until the controller is ready */
+            tft_panel_set_brightness(0);
+        } else {
+            /* The PWM is not available, the pin is driven as a plain output */
+            const gpio_config_t bl_config = {
+                .pin_bit_mask = 1ULL << s_bl_gpio,
+                .mode = GPIO_MODE_OUTPUT,
+                .pull_up_en = GPIO_PULLUP_DISABLE,
+                .pull_down_en = GPIO_PULLDOWN_DISABLE,
+                .intr_type = GPIO_INTR_DISABLE,
+            };
+            ESP_RETURN_ON_ERROR(gpio_config(&bl_config), TAG,
+                                "gpio_config() of the backlight failed");
+            gpio_set_level(s_bl_gpio, s_bl_active_low ? 1 : 0);
+
+            ESP_LOGW(TAG, "The PWM of the backlight could not be configured (%s), "
+                          "the backlight can only be switched on and off",
+                     esp_err_to_name(err));
+        }
     }
 
     /* The SPI bus. The maximum size of a transfer is the size of a band of
@@ -726,16 +783,69 @@ void tft_panel_set_backlight(bool on)
     }
 
     s_bl_on = on;
+
+    if (s_bl_pwm) {
+        /* The brightness is driven by the PWM */
+        tft_panel_set_brightness(on ? 100 : 0);
+        return;
+    }
+
     if (s_bl_active_low) {
         gpio_set_level(s_bl_gpio, on ? 0 : 1);
     } else {
         gpio_set_level(s_bl_gpio, on ? 1 : 0);
     }
+
+    /* The PWM is not available, the brightness is only on or off */
+    s_brightness = on ? 100 : 0;
 }
 
 bool tft_panel_backlight_is_on(void)
 {
     return s_bl_on;
+}
+
+esp_err_t tft_panel_set_brightness(int percent)
+{
+    if (percent < 0 || percent > 100) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (s_bl_gpio < 0) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (!s_bl_pwm) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* The duty of the PWM that corresponds to the brightness */
+    uint32_t duty = (uint32_t)percent * BACKLIGHT_PWM_MAX / 100;
+
+    /* The backlight is lit when the pin is low, the duty is the opposite of
+       the brightness */
+    if (s_bl_active_low) {
+        duty = BACKLIGHT_PWM_MAX - duty;
+    }
+
+    /* The two calls are not atomic, the lock of the panel serializes the
+       accesses to the channel. The function ledc_set_duty_and_update() would
+       do the same in one call, but it needs the fade service of the driver,
+       which is not installed here. */
+    panel_lock();
+    esp_err_t err = ledc_set_duty(BACKLIGHT_LEDC_MODE, BACKLIGHT_LEDC_CHANNEL, duty);
+    if (err == ESP_OK) {
+        err = ledc_update_duty(BACKLIGHT_LEDC_MODE, BACKLIGHT_LEDC_CHANNEL);
+    }
+    panel_unlock();
+    ESP_RETURN_ON_ERROR(err, TAG, "ledc_set_duty() failed");
+
+    s_brightness = percent;
+    s_bl_on = percent > 0;
+    return ESP_OK;
+}
+
+int tft_panel_get_brightness(void)
+{
+    return s_brightness;
 }
 
 esp_err_t tft_panel_set_madctl(uint8_t value)

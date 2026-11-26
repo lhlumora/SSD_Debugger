@@ -51,6 +51,7 @@ typedef struct {
     int   rst_gpio;              /* reset */
     int   bl_gpio;               /* backlight, -1 when it is not connected */
     bool  bl_active_low;         /* the backlight is lit when the pin is low */
+    int   bl_pwm_freq_hz;        /* frequency of the PWM of the backlight */
     int   clock_speed_hz;        /* SPI clock, 0 for the default (2 MHz) */
     tft_panel_rotation_t rotation;  /* orientation of the screen */
     int   width;                 /* width of the visible area */
@@ -108,7 +109,8 @@ void tft_panel_get_size(int *width, int *height);
 /**
  * @brief  Switch the backlight on or off
  *
- * Does nothing when the backlight is not connected to a GPIO.
+ * Does nothing when the backlight is not connected to a GPIO. The backlight
+ * is switched on with its maximum brightness.
  */
 void tft_panel_set_backlight(bool on);
 
@@ -116,6 +118,27 @@ void tft_panel_set_backlight(bool on);
  * @brief  Whether the backlight is on
  */
 bool tft_panel_backlight_is_on(void);
+
+/**
+ * @brief  Set the brightness of the backlight
+ *
+ * The brightness is driven by a PWM signal, it is set with a percentage of
+ * the maximum brightness.
+ *
+ * @param percent the brightness, from 0 (the backlight is off) to 100 (the
+ *                backlight is at its maximum brightness)
+ *
+ * @return ESP_OK on success, ESP_ERR_INVALID_STATE when the backlight is not
+ *         connected to a GPIO or when the PWM is not available
+ */
+esp_err_t tft_panel_set_brightness(int percent);
+
+/**
+ * @brief  Get the brightness of the backlight
+ *
+ * @return the brightness, in percent
+ */
+int tft_panel_get_brightness(void);
 
 /**
  * @brief  Set the value of the MADCTL register of the controller

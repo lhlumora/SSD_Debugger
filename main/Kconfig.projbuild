@@ -226,6 +226,15 @@ menu "Example Configuration"
                 driven high. Enable this option when the module uses the
                 opposite polarity.
 
+        config EXAMPLE_LCD_BL_PWM_FREQ_HZ
+            int "Frequency of the PWM of the backlight (Hz)"
+            range 100 40000000
+            default 5000
+            help
+                The frequency of the PWM signal that drives the brightness of
+                the backlight. A frequency of a few kilohertz is enough to
+                avoid any visible flicker.
+
         config EXAMPLE_LCD_SPI_CLOCK_HZ
             int "SPI clock (Hz)"
             range 100000 80000000

@@ -96,14 +96,31 @@ int lcd_display_get_rotation(void);
 void lcd_display_refresh(void);
 
 /**
- * @brief  Switch the backlight on or off
+ * @brief  Switch the backlight of the display on or off
  */
 void lcd_display_set_backlight(bool on);
 
 /**
- * @brief  Whether the backlight is on
+ * @brief  Whether the backlight of the display is on
  */
 bool lcd_display_backlight_is_on(void);
+
+/**
+ * @brief  Set the brightness of the backlight of the display
+ *
+ * @param percent the brightness, from 0 (the backlight is off) to 100 (the
+ *                backlight is at its maximum brightness)
+ *
+ * @return ESP_OK on success
+ */
+esp_err_t lcd_display_set_brightness(int percent);
+
+/**
+ * @brief  Get the brightness of the backlight of the display
+ *
+ * @return the brightness, in percent
+ */
+int lcd_display_get_brightness(void);
 
 #ifdef __cplusplus
 }

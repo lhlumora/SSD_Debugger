@@ -226,16 +226,15 @@ static void update_info(lv_timer_t *timer)
 
     lv_label_set_text_fmt(s_info,
                           "%dx%d %s %dMHz\n"
-                          "off %d/%d rot %d %s\n"
-                          "LVGL %d.%d.%d %s",
+                          "off %d/%d rot %d\n"
+                          "LVGL %d.%d.%d BL %d%% %s",
                           width, height,
                           (tft_panel_get_madctl() & 0x08) ? "BGR" : "RGB",
                           tft_panel_get_clock() / 1000000,
                           col_start, row_start,
                           lcd_display_get_rotation(),
-                          tft_panel_backlight_is_on() ? "BL on" : "BL off",
                           LVGL_VERSION_MAJOR, LVGL_VERSION_MINOR, LVGL_VERSION_PATCH,
-                          uptime);
+                          lcd_display_get_brightness(), uptime);
 }
 
 /* Create the screen of the test */

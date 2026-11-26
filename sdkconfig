@@ -1024,6 +1024,8 @@ CONFIG_EXAMPLE_LCD_RST_GPIO=6
 CONFIG_EXAMPLE_LCD_BL_GPIO=9
 # default:
 # CONFIG_EXAMPLE_LCD_BL_ACTIVE_LOW is not set
+# default:
+CONFIG_EXAMPLE_LCD_BL_PWM_FREQ_HZ=5000
 CONFIG_EXAMPLE_LCD_SPI_CLOCK_HZ=20000000
 # default:
 CONFIG_EXAMPLE_LCD_ROTATION=0
@@ -1302,6 +1304,13 @@ CONFIG_GDMA_OBJ_DRAM_SAFE=y
 # default:
 # CONFIG_GPIO_CTRL_FUNC_IN_IRAM is not set
 # end of ESP-Driver:GPIO Configurations
+
+#
+# ESP-Driver:LEDC Configurations
+#
+# default:
+# CONFIG_LEDC_CTRL_FUNC_IN_IRAM is not set
+# end of ESP-Driver:LEDC Configurations
 
 #
 # ESP-Driver:SPI Configurations
